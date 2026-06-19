@@ -19,16 +19,8 @@ from dataclasses import dataclass
 from sqlmodel import Session, select
 
 from app.core.config import settings
+from app.detection.catalog import SEVERITY_FLOOR, get_definition
 from app.models.tables import Asset, Signal, User
-
-# Baseline danger per technique (0..100) before confidence/severity adjustment.
-THREAT_BASELINE = {
-    "ransomware": 90,
-    "account_takeover": 80,
-    "data_exfiltration": 75,
-    "anomalous_activity": 55,
-    "suspicious_login": 45,
-}
 
 
 @dataclass
@@ -39,6 +31,7 @@ class ScoreBreakdown:
     business_impact: float
     final_score: float
     confidence: float
+    matched_factors: dict[str, int]
 
 
 def _clamp(v: float) -> float:
@@ -57,14 +50,21 @@ def _asset(session: Session, name: str | None) -> Asset | None:
     return session.exec(select(Asset).where(Asset.name == name)).first()
 
 
-def score_incident(session: Session, signals: list[Signal], threat_type: str,
+def score_incident(session: Session, signals: list[Signal], det_id: str,
                    username: str | None, asset_name: str | None) -> ScoreBreakdown:
-    severity = max((s.severity for s in signals), default=3)
     confidence = max((s.confidence for s in signals), default=0.5)
 
-    # threat_score: baseline shaped by severity (1..5) and confidence.
-    baseline = THREAT_BASELINE.get(threat_type, 50)
-    threat_score = _clamp(baseline * (0.6 + 0.08 * severity) * (0.7 + 0.3 * confidence))
+    # threat_score (F4): sum of matched catalog scoring_factors across the
+    # incident's signals, with a floor from the detection's default_severity so
+    # critical techniques never score trivially.
+    matched: dict[str, int] = {}
+    for s in signals:
+        for k, v in (s.matched_factors or {}).items():
+            matched[k] = max(matched.get(k, 0), v)
+    points = min(sum(matched.values()), 100)
+    definition = get_definition(det_id)
+    floor = SEVERITY_FLOOR.get(definition["default_severity"], 30) if definition else 30
+    threat_score = _clamp(max(points, floor))
 
     # user_risk: privilege + existing rolling risk + this event's pressure.
     user = _user(session, username)
@@ -79,9 +79,9 @@ def score_incident(session: Session, signals: list[Signal], threat_type: str,
     asset = _asset(session, asset_name)
     asset_risk = _clamp((asset.sensitivity / 5 * 100) if asset else 50.0)
 
-    # business_impact: blend of asset criticality, user importance, technique.
+    # business_impact: blend of asset criticality, threat severity, user importance.
     priv_factor = 1.15 if (user and user.is_privileged) else 1.0
-    business_impact = _clamp((0.6 * asset_risk + 0.4 * baseline) * priv_factor * (0.7 + 0.3 * confidence))
+    business_impact = _clamp((0.6 * asset_risk + 0.4 * threat_score) * priv_factor * (0.8 + 0.2 * confidence))
 
     final_score = _clamp(
         settings.weight_threat * threat_score
@@ -96,6 +96,7 @@ def score_incident(session: Session, signals: list[Signal], threat_type: str,
         business_impact=round(business_impact, 1),
         final_score=round(final_score, 1),
         confidence=round(confidence, 2),
+        matched_factors=matched,
     )
 
 

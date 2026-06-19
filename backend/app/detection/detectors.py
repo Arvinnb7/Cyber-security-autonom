@@ -1,9 +1,8 @@
-"""Threat detection engine (F3).
+"""Threat detection engine (F3) — aligned to the MVP Detection Catalog.
 
-Each detector is a pure function over a recent window of canonical events that
-yields candidate :class:`Signal` objects (not yet persisted). Detectors are
-rule/heuristic based and intentionally transparent — the user's attack-model
-file can later add data-driven rules alongside these.
+Each detector maps to a catalog entry (DET-001..DET-010). When a pattern fires it
+reports exactly which catalog ``scoring_factors`` matched; the scoring engine sums
+those points into ``threat_score``. Detectors stay transparent and rule-based.
 """
 from __future__ import annotations
 
@@ -14,12 +13,15 @@ from datetime import timedelta
 from sqlmodel import Session, select
 
 from app.core.time import utcnow
+from app.detection.catalog import get_definition
 from app.models.tables import Event, Signal
-from app.simulation.org import GEO
+from app.simulation.org import GEO, is_privileged
 
 # Look back this far when correlating an event chain.
 WINDOW_MINUTES = 180
 
+
+# --- helpers --------------------------------------------------------------
 
 def _haversine_km(c1: str, c2: str) -> float:
     if c1 not in GEO or c2 not in GEO:
@@ -28,17 +30,14 @@ def _haversine_km(c1: str, c2: str) -> float:
     _, lat2, lon2 = GEO[c2]
     r = 6371.0
     p1, p2 = math.radians(lat1), math.radians(lat2)
-    dphi = math.radians(lat2 - lat1)
-    dlmb = math.radians(lon2 - lon1)
+    dphi, dlmb = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
     a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2
     return 2 * r * math.asin(math.sqrt(a))
 
 
 def _recent_events(session: Session) -> list[Event]:
     cutoff = utcnow() - timedelta(minutes=WINDOW_MINUTES)
-    return list(session.exec(
-        select(Event).where(Event.timestamp >= cutoff).order_by(Event.timestamp)
-    ))
+    return list(session.exec(select(Event).where(Event.timestamp >= cutoff).order_by(Event.timestamp)))
 
 
 def _by_user(events: list[Event]) -> dict[str, list[Event]]:
@@ -49,118 +48,386 @@ def _by_user(events: list[Event]) -> dict[str, list[Event]]:
     return grouped
 
 
-# --- Detectors ------------------------------------------------------------
-
-def detect_impossible_travel(events: list[Event]) -> list[Signal]:
-    signals: list[Signal] = []
-    for user, evs in _by_user(events).items():
-        logins = [e for e in evs if e.action == "login_success" and e.country]
-        for a, b in zip(logins, logins[1:]):
-            if a.country == b.country:
-                continue
-            dt_hours = max((b.timestamp - a.timestamp).total_seconds() / 3600, 1 / 60)
-            dist = _haversine_km(a.country, b.country)
-            speed = dist / dt_hours
-            if speed > 900:  # faster than a commercial flight => impossible
-                signals.append(Signal(
-                    detector="impossible_travel", threat_type="account_takeover",
-                    actor_username=user, target_asset=b.target_asset, severity=4,
-                    confidence=min(0.6 + speed / 5000, 0.95),
-                    description=(f"{user} logged in from {a.country} then {b.country} "
-                                f"{dt_hours*60:.0f} min apart ({dist:.0f} km, ~{speed:.0f} km/h)."),
-                    event_ids=[a.id, b.id],
-                ))
-    return signals
-
-
-def detect_account_takeover(events: list[Event]) -> list[Signal]:
-    signals: list[Signal] = []
-    for user, evs in _by_user(events).items():
-        mfa_fails = [e for e in evs if e.action == "mfa_failed"]
-        foreign_login = [e for e in evs if e.action == "login_success"
-                         and e.country and e.country not in ("IR",)]
-        downloads = [e for e in evs if e.action == "file_download"]
-        if mfa_fails and foreign_login and len(downloads) >= 15:
-            ids = [e.id for e in (mfa_fails + foreign_login + downloads)]
-            signals.append(Signal(
-                detector="account_takeover", threat_type="account_takeover",
-                actor_username=user, target_asset=downloads[-1].target_asset, severity=5,
-                confidence=0.92,
-                description=(f"{user}: {len(mfa_fails)} MFA failures, foreign login, then "
-                            f"{len(downloads)} file downloads — classic account takeover."),
-                event_ids=ids,
-            ))
-    return signals
-
-
-def detect_ransomware(events: list[Event]) -> list[Signal]:
-    signals: list[Signal] = []
-    by_asset: dict[str, list[Event]] = defaultdict(list)
+def _by_asset(events: list[Event]) -> dict[str, list[Event]]:
+    grouped: dict[str, list[Event]] = defaultdict(list)
     for e in events:
         if e.target_asset:
-            by_asset[e.target_asset].append(e)
-    for asset, evs in by_asset.items():
-        renames = [e for e in evs if e.action == "file_rename"]
-        malware = [e for e in evs if e.action == "malware_detected"]
-        if len(renames) >= 20 or malware:
-            conf = 0.97 if malware else min(0.7 + len(renames) / 200, 0.95)
-            user = next((e.actor_username for e in (malware + renames) if e.actor_username), None)
-            signals.append(Signal(
-                detector="ransomware", threat_type="ransomware",
-                actor_username=user, target_asset=asset, severity=5, confidence=conf,
-                description=(f"{asset}: {len(renames)} rapid file renames"
-                            + (" + EDR malware verdict" if malware else "")
-                            + " — ransomware encryption pattern."),
-                event_ids=[e.id for e in (renames + malware)],
-            ))
-    return signals
+            grouped[e.target_asset].append(e)
+    return grouped
 
 
-def detect_data_exfiltration(events: list[Event]) -> list[Signal]:
-    signals: list[Signal] = []
+def _has(events: list[Event], action: str) -> bool:
+    return any(e.action == action for e in events)
+
+
+def _count(events: list[Event], action: str) -> int:
+    return sum(1 for e in events if e.action == action)
+
+
+def _flag(events: list[Event], action: str, key: str) -> bool:
+    return any(e.action == action and e.raw.get(key) for e in events)
+
+
+def _severity_int(points: int) -> int:
+    if points >= 86:
+        return 5
+    if points >= 61:
+        return 4
+    if points >= 31:
+        return 3
+    if points >= 15:
+        return 2
+    return 1
+
+
+def make_signal(det_id: str, factor_keys: set[str], *, actor: str | None, asset: str | None,
+                events: list[Event], confidence: float, detail: str) -> Signal | None:
+    """Build a Signal from matched catalog scoring_factors."""
+    definition = get_definition(det_id)
+    if not definition:
+        return None
+    factors: dict[str, int] = definition["scoring_factors"]
+    matched = {k: factors[k] for k in factor_keys if k in factors}
+    if not matched:
+        return None
+    points = min(sum(matched.values()), 100)
+    name = definition["name_en"]
+    return Signal(
+        detector=det_id.lower().replace("-", "_"),
+        det_id=det_id,
+        threat_type=name.lower().replace(" ", "_"),
+        actor_username=actor,
+        target_asset=asset,
+        severity=_severity_int(points),
+        confidence=round(confidence, 2),
+        description=f"{name}: {detail}",
+        matched_factors=matched,
+        event_ids=[e.id for e in events if e.id is not None],
+    )
+
+
+# --- DET-001 Suspicious Login --------------------------------------------
+
+def det_suspicious_login(events: list[Event]) -> list[Signal]:
+    out: list[Signal] = []
     for user, evs in _by_user(events).items():
-        downloads = [e for e in evs if e.action == "file_download"]
+        logins = [e for e in evs if e.action == "login_success" and e.country]
+        if not logins:
+            continue
+        keys: set[str] = set()
+        home = next((e.raw.get("home") for e in logins if e.raw.get("home")), "IR")
+        if any(e.country != home for e in logins):
+            keys.add("new_country")
+        if _flag(evs, "login_success", "new_device"):
+            keys.add("new_device")
+        if _flag(evs, "login_success", "off_hours"):
+            keys.add("unusual_time")
+        if _flag(evs, "login_success", "risky_ip") or _flag(evs, "login_failed", "risky_ip"):
+            keys.add("risky_ip")
+        # impossible travel
+        for a, b in zip(logins, logins[1:]):
+            if a.country != b.country:
+                hrs = max((b.timestamp - a.timestamp).total_seconds() / 3600, 1 / 60)
+                if _haversine_km(a.country, b.country) / hrs > 900:
+                    keys.add("impossible_travel")
+        if is_privileged(user):
+            keys.add("privileged_user")
+        if {"new_country", "impossible_travel", "risky_ip"} & keys:
+            sig = make_signal("DET-001", keys, actor=user, asset=logins[-1].target_asset,
+                              events=logins, confidence=0.6 + 0.08 * len(keys),
+                              detail=f"anomalous login pattern for {user} ({', '.join(sorted(keys))}).")
+            if sig:
+                out.append(sig)
+    return out
+
+
+# --- DET-002 Account Compromise ------------------------------------------
+
+def det_account_compromise(events: list[Event]) -> list[Signal]:
+    out: list[Signal] = []
+    for user, evs in _by_user(events).items():
+        keys: set[str] = set()
+        foreign_login = any(e.action == "login_success" and e.country not in (None, "IR") for e in evs)
+        if foreign_login and (_has(evs, "password_changed") or _has(evs, "mfa_disabled")):
+            keys.add("suspicious_login_before_change")
+        if _has(evs, "mfa_disabled"):
+            keys.add("mfa_disabled")
+        if _has(evs, "password_changed"):
+            keys.add("password_changed")
+        if _count(evs, "file_download") >= 15:
+            keys.add("mass_file_download")
+        if _count(evs, "email_send") >= 10:
+            keys.add("email_spam_behavior")
+        if is_privileged(user):
+            keys.add("privileged_user")
+        if {"mfa_disabled", "mass_file_download", "suspicious_login_before_change"} & keys and len(keys) >= 2:
+            related = [e for e in evs if e.action in
+                       ("login_success", "mfa_disabled", "password_changed", "file_download", "email_send")]
+            sig = make_signal("DET-002", keys, actor=user, asset=None, events=related,
+                              confidence=0.7 + 0.06 * len(keys),
+                              detail=f"{user} shows account-takeover behaviour ({', '.join(sorted(keys))}).")
+            if sig:
+                out.append(sig)
+    return out
+
+
+# --- DET-003 Phishing -----------------------------------------------------
+
+def det_phishing(events: list[Event]) -> list[Signal]:
+    out: list[Signal] = []
+    mails = [e for e in events if e.action == "email_received"]
+    by_campaign: dict[str, list[Event]] = defaultdict(list)
+    for e in mails:
+        by_campaign[e.raw.get("sender_domain", "unknown")].append(e)
+    for domain, evs in by_campaign.items():
+        keys: set[str] = set()
+        if any(e.raw.get("lookalike_domain") for e in evs):
+            keys.add("lookalike_domain")
+        if any(e.raw.get("malicious_url") for e in evs):
+            keys.add("malicious_url")
+        if any(e.raw.get("attachment") for e in evs):
+            keys.add("suspicious_attachment")
+        if len(evs) >= 5:
+            keys.add("mass_recipient_count")
+        if any(e.raw.get("cred_keywords") for e in evs):
+            keys.add("credential_harvesting_keywords")
+        if any(e.raw.get("auth_fail") for e in evs):
+            keys.add("failed_email_authentication")
+        if {"malicious_url", "lookalike_domain", "suspicious_attachment"} & keys:
+            sig = make_signal("DET-003", keys, actor=None, asset="exchange-online", events=evs,
+                              confidence=0.65 + 0.05 * len(keys),
+                              detail=f"phishing campaign from {domain} to {len(evs)} user(s).")
+            if sig:
+                out.append(sig)
+    return out
+
+
+# --- DET-004 Malware Execution -------------------------------------------
+
+def det_malware_execution(events: list[Event]) -> list[Signal]:
+    out: list[Signal] = []
+    for asset, evs in _by_asset(events).items():
+        keys: set[str] = set()
+        if _flag(evs, "process_start", "unknown_hash"):
+            keys.add("unknown_file_hash")
+        if _flag(evs, "malware_detected", "hash_match") or _has(evs, "malware_detected"):
+            keys.add("malicious_hash_match")
+        if _flag(evs, "process_start", "powershell_suspicious"):
+            keys.add("suspicious_powershell")
+        if _flag(evs, "process_start", "bad_network"):
+            keys.add("malicious_network_connection")
+        if _flag(evs, "process_start", "tamper"):
+            keys.add("security_tool_tampering")
+        if _flag(evs, "process_start", "privileged"):
+            keys.add("privileged_execution")
+        # Avoid double-firing with ransomware (which owns file_rename storms).
+        if keys and not _has(evs, "file_rename"):
+            actor = next((e.actor_username for e in evs if e.actor_username), None)
+            related = [e for e in evs if e.action in ("process_start", "malware_detected")]
+            sig = make_signal("DET-004", keys, actor=actor, asset=asset, events=related,
+                              confidence=0.7 + 0.05 * len(keys),
+                              detail=f"malicious execution on {asset} ({', '.join(sorted(keys))}).")
+            if sig:
+                out.append(sig)
+    return out
+
+
+# --- DET-005 Ransomware ---------------------------------------------------
+
+def det_ransomware(events: list[Event]) -> list[Signal]:
+    out: list[Signal] = []
+    for asset, evs in _by_asset(events).items():
+        renames = _count(evs, "file_rename")
+        keys: set[str] = set()
+        if renames >= 20:
+            keys.add("mass_file_modification")
+            keys.add("rapid_encryption_pattern")
+        if _has(evs, "shadow_copy_delete"):
+            keys.add("shadow_copy_deletion")
+        if any(e.action == "malware_detected" and "Ransom" in str(e.raw.get("signature", "")) for e in evs):
+            keys.add("known_ransomware_tool")
+        if _flag(evs, "file_rename", "network_share"):
+            keys.add("multiple_network_shares")
+        if _has(evs, "backup_tamper"):
+            keys.add("backup_tampering")
+        if {"mass_file_modification", "known_ransomware_tool", "shadow_copy_deletion"} & keys:
+            actor = next((e.actor_username for e in evs if e.actor_username), None)
+            related = [e for e in evs if e.action in
+                       ("file_rename", "shadow_copy_delete", "malware_detected", "backup_tamper")]
+            sig = make_signal("DET-005", keys, actor=actor, asset=asset, events=related,
+                              confidence=0.85 + 0.03 * len(keys),
+                              detail=f"{asset}: {renames} rapid file renames + ransomware indicators.")
+            if sig:
+                out.append(sig)
+    return out
+
+
+# --- DET-006 Data Exfiltration -------------------------------------------
+
+def det_data_exfiltration(events: list[Event]) -> list[Signal]:
+    out: list[Signal] = []
+    for user, evs in _by_user(events).items():
+        keys: set[str] = set()
+        if _count(evs, "file_download") >= 20:
+            keys.add("large_download_volume")
+            keys.add("sensitive_data_access")
         uploads = [e for e in evs if e.action == "large_upload"]
-        if len(downloads) >= 20 and uploads:
-            dest = uploads[-1].raw.get("destination", "external")
-            signals.append(Signal(
-                detector="data_exfiltration", threat_type="data_exfiltration",
-                actor_username=user, target_asset=downloads[-1].target_asset, severity=4,
-                confidence=0.88,
-                description=(f"{user} downloaded {len(downloads)} files then uploaded a large "
-                            f"volume to {dest} — likely data exfiltration."),
-                event_ids=[e.id for e in (downloads + uploads)],
-            ))
-    return signals
+        if uploads:
+            keys.add("large_upload_volume")
+            if any(e.raw.get("external") for e in uploads):
+                keys.add("unknown_external_service")
+        if _flag(evs, "large_upload", "off_hours") or _flag(evs, "file_download", "off_hours"):
+            keys.add("after_hours_transfer")
+        if _has(evs, "archive_create"):
+            keys.add("compressed_archive_creation")
+        if "large_upload_volume" in keys and "large_download_volume" in keys:
+            related = [e for e in evs if e.action in ("file_download", "large_upload", "archive_create")]
+            asset = next((e.target_asset for e in related if e.target_asset), None)
+            sig = make_signal("DET-006", keys, actor=user, asset=asset, events=related,
+                              confidence=0.78 + 0.04 * len(keys),
+                              detail=f"{user} downloaded in bulk then uploaded externally.")
+            if sig:
+                out.append(sig)
+    return out
 
 
-def detect_anomalous_activity(events: list[Event]) -> list[Signal]:
-    signals: list[Signal] = []
+# --- DET-007 Privilege Abuse ---------------------------------------------
+
+def det_privilege_abuse(events: list[Event]) -> list[Signal]:
+    out: list[Signal] = []
     for user, evs in _by_user(events).items():
-        risky = [e for e in evs if e.action in ("privilege_escalation", "config_change")]
-        if risky:
-            signals.append(Signal(
-                detector="anomalous_activity", threat_type="anomalous_activity",
-                actor_username=user, target_asset=risky[-1].target_asset, severity=4,
-                confidence=0.8,
-                description=(f"{user} performed {len(risky)} sensitive operations "
-                            f"({', '.join(sorted({e.action for e in risky}))}) — abnormal for this account."),
-                event_ids=[e.id for e in risky],
-            ))
-    return signals
+        keys: set[str] = set()
+        if _has(evs, "admin_create_user"):
+            keys.add("new_admin_user_created")
+        if _flag(evs, "permission_change", "sensitive"):
+            keys.add("sensitive_permission_change")
+        if _flag(evs, "admin_activity", "off_hours"):
+            keys.add("after_hours_admin_activity")
+        if _has(evs, "security_control_disabled"):
+            keys.add("security_control_disabled")
+        if _flag(evs, "admin_activity", "new_device"):
+            keys.add("new_device_for_admin")
+        if _count(evs, "permission_change") >= 3:
+            keys.add("multiple_admin_changes")
+        if {"new_admin_user_created", "security_control_disabled", "sensitive_permission_change"} & keys:
+            related = [e for e in evs if e.action in
+                       ("admin_create_user", "permission_change", "security_control_disabled", "admin_activity")]
+            asset = next((e.target_asset for e in related if e.target_asset), None)
+            sig = make_signal("DET-007", keys, actor=user, asset=asset, events=related,
+                              confidence=0.72 + 0.05 * len(keys),
+                              detail=f"{user} abused administrative access ({', '.join(sorted(keys))}).")
+            if sig:
+                out.append(sig)
+    return out
+
+
+# --- DET-008 Security Configuration Changes ------------------------------
+
+_CONFIG_FACTOR = {
+    "mfa_disabled": "mfa_disabled",
+    "firewall_rule_removed": "firewall_rule_removed",
+    "port_opened": "sensitive_port_opened",
+    "logging_disabled": "logging_disabled",
+    "backup_weakened": "backup_policy_weakened",
+    "public_exposure": "public_exposure_created",
+}
+
+
+def det_security_config_change(events: list[Event]) -> list[Signal]:
+    out: list[Signal] = []
+    for asset, evs in _by_asset(events).items():
+        changes = [e for e in evs if e.action == "config_change"]
+        keys: set[str] = set()
+        for e in changes:
+            factor = _CONFIG_FACTOR.get(str(e.raw.get("change")))
+            if factor:
+                keys.add(factor)
+        if keys:
+            actor = next((e.actor_username for e in changes if e.actor_username), None)
+            sig = make_signal("DET-008", keys, actor=actor, asset=asset, events=changes,
+                              confidence=0.68 + 0.05 * len(keys),
+                              detail=f"security posture weakened on {asset} ({', '.join(sorted(keys))}).")
+            if sig:
+                out.append(sig)
+    return out
+
+
+# --- DET-009 Lateral Movement --------------------------------------------
+
+def det_lateral_movement(events: list[Event]) -> list[Signal]:
+    out: list[Signal] = []
+    for user, evs in _by_user(events).items():
+        remote_logins = [e for e in evs if e.action == "remote_login"]
+        hosts = {e.target_asset for e in remote_logins if e.target_asset}
+        keys: set[str] = set()
+        if len(hosts) >= 3:
+            keys.add("multiple_hosts_accessed")
+            keys.add("new_internal_access_pattern")
+        if _has(evs, "remote_exec"):
+            keys.add("remote_execution_detected")
+        if _flag(evs, "remote_login", "shared_creds"):
+            keys.add("shared_credentials")
+        if _flag(evs, "remote_login", "admin_protocol"):
+            keys.add("admin_protocol_abuse")
+        if _flag(evs, "remote_login", "sensitive_server"):
+            keys.add("sensitive_server_access")
+        if {"multiple_hosts_accessed", "remote_execution_detected"} & keys:
+            related = [e for e in evs if e.action in ("remote_login", "remote_exec")]
+            sig = make_signal("DET-009", keys, actor=user, asset=sorted(hosts)[0] if hosts else None,
+                              events=related, confidence=0.75 + 0.04 * len(keys),
+                              detail=f"{user} moved laterally across {len(hosts)} hosts.")
+            if sig:
+                out.append(sig)
+    return out
+
+
+# --- DET-010 Privilege Escalation ----------------------------------------
+
+def det_privilege_escalation(events: list[Event]) -> list[Signal]:
+    out: list[Signal] = []
+    for user, evs in _by_user(events).items():
+        keys: set[str] = set()
+        if _has(evs, "group_add_admin"):
+            keys.add("added_to_admin_group")
+        if _flag(evs, "privilege_escalation", "tool"):
+            keys.add("privilege_escalation_tool")
+        if _has(evs, "role_change_admin"):
+            keys.add("role_changed_to_admin")
+        if _flag(evs, "privilege_escalation", "exploit"):
+            keys.add("exploit_behavior")
+        if _has(evs, "access_key_create"):
+            keys.add("new_access_key_created")
+        if _flag(evs, "permission_change", "sensitive_granted"):
+            keys.add("sensitive_permission_granted")
+        if {"added_to_admin_group", "privilege_escalation_tool", "role_changed_to_admin", "exploit_behavior"} & keys:
+            related = [e for e in evs if e.action in
+                       ("privilege_escalation", "group_add_admin", "role_change_admin", "access_key_create",
+                        "permission_change")]
+            asset = next((e.target_asset for e in related if e.target_asset), None)
+            sig = make_signal("DET-010", keys, actor=user, asset=asset, events=related,
+                              confidence=0.78 + 0.04 * len(keys),
+                              detail=f"{user} escalated privileges ({', '.join(sorted(keys))}).")
+            if sig:
+                out.append(sig)
+    return out
 
 
 DETECTORS = [
-    detect_impossible_travel,
-    detect_account_takeover,
-    detect_ransomware,
-    detect_data_exfiltration,
-    detect_anomalous_activity,
+    det_suspicious_login,        # DET-001
+    det_account_compromise,      # DET-002
+    det_phishing,                # DET-003
+    det_malware_execution,       # DET-004
+    det_ransomware,              # DET-005
+    det_data_exfiltration,       # DET-006
+    det_privilege_abuse,         # DET-007
+    det_security_config_change,  # DET-008
+    det_lateral_movement,        # DET-009
+    det_privilege_escalation,    # DET-010
 ]
 
 
 def _signal_fingerprint(s: Signal) -> str:
-    return f"{s.detector}:{s.actor_username}:{s.target_asset}:{min(s.event_ids or [0])}"
+    return f"{s.det_id}:{s.actor_username}:{s.target_asset}:{min(s.event_ids or [0])}"
 
 
 def run_detectors(session: Session) -> list[Signal]:
@@ -170,7 +437,6 @@ def run_detectors(session: Session) -> list[Signal]:
     for det in DETECTORS:
         candidates.extend(det(events))
 
-    # De-duplicate against signals already stored (idempotent cycles).
     existing = session.exec(select(Signal).where(
         Signal.created_at >= utcnow() - timedelta(minutes=WINDOW_MINUTES * 2)
     ))

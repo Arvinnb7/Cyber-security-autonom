@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
-import { PageHeader, RiskPill, Spinner, StatusPill } from "@/components/ui";
+import { PageHeader, RiskPill, SeverityPill, Spinner, StatusPill } from "@/components/ui";
 import { api, threatLabel } from "@/lib/api";
 
 const FILTERS = ["all", "open", "investigating", "resolved", "dismissed"];
@@ -55,10 +55,11 @@ export default function IncidentsPage() {
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-white">{i.title || threatLabel(i.threat_type)}</span>
+                    <SeverityPill severity={i.severity} />
                     <StatusPill status={i.status} />
                   </div>
                   <div className="mt-1 text-xs text-slate-500">
-                    #{i.id} · {threatLabel(i.threat_type)} · {Math.round(i.confidence * 100)}% confidence
+                    <span className="font-mono text-accent-soft">{i.det_id}</span> · {Math.round(i.confidence * 100)}% confidence
                     {i.target_asset && <> · target {i.target_asset}</>}
                   </div>
                 </div>

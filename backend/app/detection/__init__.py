@@ -1,4 +1,6 @@
-from app.detection.correlation import correlate_and_score
-from app.detection.detectors import DETECTORS, run_detectors
+"""Detection package.
 
-__all__ = ["DETECTORS", "run_detectors", "correlate_and_score"]
+NOTE: intentionally light — importing submodules (``catalog``, ``detectors``,
+``correlation``) directly avoids a circular import between correlation and the
+AI analysis module. Use ``from app.detection.detectors import run_detectors`` etc.
+"""

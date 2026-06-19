@@ -1,11 +1,11 @@
-"""Realistic attack scenarios (F3 demo input).
+"""Realistic attack scenarios covering the 10 catalog detections (F3 demo input).
 
-Each scenario emits a chain of :class:`RawEvent` that, once ingested and run
-through the detection engine, correlates into a single incident.
+Each scenario emits a chain of :class:`RawEvent` that correlates into one incident
+matching a specific catalog detection (DET-001..DET-010).
 
 >>> PLUG-IN POINT <<<
-The user's "attack model" file drops into ``data/attack_models/`` and is loaded
-by ``load_external_scenarios()`` to extend or override these built-ins.
+User-provided attack-model files in ``data/attack_models/`` are loaded by
+``load_external_scenarios()`` to extend these built-ins.
 """
 from __future__ import annotations
 
@@ -31,115 +31,233 @@ def _now() -> datetime:
 
 
 def _ip(country: str) -> str:
-    random.seed(country + str(random.random()))
     return ".".join(str(random.randint(1, 254)) for _ in range(4))
 
 
-def _login(source: str, user: str, country: str, action: str, ts: datetime, asset: str | None = None) -> RawEvent:
-    city, _, _ = GEO[country]
-    return RawEvent(
-        source=source, timestamp=ts, category="authentication", action=action,
-        actor_username=user, src_ip=_ip(country), country=country, city=city,
-        target_asset=asset, severity=2 if action == "login_success" else 3,
-        raw={"auth_method": "password", "mfa": action != "mfa_failed"},
-    )
+def _evt(source: str, category: str, action: str, ts: datetime, **kw) -> RawEvent:
+    return RawEvent(source=source, timestamp=ts, category=category, action=action,
+                    actor_username=kw.pop("user", None), src_ip=kw.pop("src_ip", None),
+                    country=kw.pop("country", None), city=kw.pop("city", None),
+                    target_asset=kw.pop("asset", None), severity=kw.pop("severity", 2),
+                    raw=kw.pop("raw", {}))
 
 
-# --- Individual scenarios -------------------------------------------------
+def _pick_user(privileged: bool | None = None) -> str:
+    pool = [u for u in DEMO_USERS if privileged is None or u["is_privileged"] == privileged]
+    return random.choice(pool)["username"]
 
-def scenario_account_takeover(user: str | None = None) -> list[RawEvent]:
-    """Impossible travel + MFA brute + mass download => account takeover."""
-    user = user or random.choice([u["username"] for u in DEMO_USERS if not u["is_privileged"]])
+
+def _asset(min_sens: int = 1, types: tuple[str, ...] | None = None) -> str:
+    pool = [a for a in DEMO_ASSETS if a["sensitivity"] >= min_sens and (not types or a["asset_type"] in types)]
+    return random.choice(pool or DEMO_ASSETS)["name"]
+
+
+# --- DET-001 Suspicious Login --------------------------------------------
+
+def scenario_suspicious_login(user: str | None = None) -> list[RawEvent]:
+    user = user or _pick_user(privileged=False)
     home = user_home(user)
     foreign = random.choice([c for c in ("RU", "CN", "NG") if c != home])
-    base = _now() - timedelta(minutes=random.randint(20, 90))
-    asset = random.choice([a["name"] for a in DEMO_ASSETS if a["asset_type"] in ("saas", "data_store")])
-    evts = [
-        _login("microsoft_365", user, home, "login_success", base),
-        _login("azure", user, foreign, "mfa_failed", base + timedelta(minutes=8)),
-        _login("azure", user, foreign, "mfa_failed", base + timedelta(minutes=9)),
-        _login("microsoft_365", user, foreign, "login_success", base + timedelta(minutes=10), asset),
+    base = _now() - timedelta(minutes=random.randint(10, 60))
+    asset = _asset(types=("saas",))
+    return [
+        _evt("microsoft_365", "authentication", "login_success", base, user=user, country=home,
+             city=GEO[home][0], src_ip=_ip(home), raw={"home": home, "new_device": False}),
+        _evt("azure", "authentication", "login_failed", base + timedelta(minutes=4), user=user,
+             country=foreign, city=GEO[foreign][0], src_ip=_ip(foreign), severity=3,
+             raw={"risky_ip": True}),
+        _evt("microsoft_365", "authentication", "login_success", base + timedelta(minutes=6), user=user,
+             country=foreign, city=GEO[foreign][0], src_ip=_ip(foreign), asset=asset, severity=3,
+             raw={"home": home, "new_device": True, "risky_ip": True, "off_hours": True}),
     ]
-    for i in range(random.randint(25, 60)):
-        evts.append(RawEvent(
-            source="microsoft_365", timestamp=base + timedelta(minutes=12, seconds=i * 7),
-            category="file", action="file_download", actor_username=user,
-            country=foreign, city=GEO[foreign][0], target_asset=asset, severity=2,
-            raw={"file": f"confidential_{i}.xlsx", "size_kb": random.randint(200, 9000)},
-        ))
+
+
+# --- DET-002 Account Compromise ------------------------------------------
+
+def scenario_account_compromise(user: str | None = None) -> list[RawEvent]:
+    user = user or _pick_user(privileged=False)
+    home = user_home(user)
+    foreign = random.choice(["RU", "CN", "NG"])
+    base = _now() - timedelta(minutes=random.randint(20, 80))
+    asset = _asset(min_sens=4, types=("saas", "data_store"))
+    evts = [
+        _evt("microsoft_365", "authentication", "login_success", base, user=user, country=foreign,
+             city=GEO[foreign][0], src_ip=_ip(foreign), severity=3, raw={"home": home, "new_device": True}),
+        _evt("azure", "authentication", "mfa_disabled", base + timedelta(minutes=2), user=user,
+             country=foreign, severity=4, raw={}),
+        _evt("azure", "authentication", "password_changed", base + timedelta(minutes=3), user=user,
+             country=foreign, severity=3, raw={}),
+    ]
+    for i in range(random.randint(20, 45)):
+        evts.append(_evt("microsoft_365", "file", "file_download", base + timedelta(minutes=5, seconds=i * 6),
+                         user=user, country=foreign, asset=asset,
+                         raw={"file": f"confidential_{i}.xlsx", "size_kb": random.randint(200, 9000)}))
     return evts
 
+
+# --- DET-003 Phishing -----------------------------------------------------
+
+def scenario_phishing(user: str | None = None) -> list[RawEvent]:
+    base = _now() - timedelta(minutes=random.randint(5, 50))
+    domain = random.choice(["m1crosoft-support.com", "secure-paypa1.com", "company-it-helpdesk.net"])
+    targets = random.sample([u["username"] for u in DEMO_USERS], k=random.randint(5, 7))
+    raw_common = {"sender_domain": domain, "lookalike_domain": True, "malicious_url": True,
+                  "attachment": random.random() > 0.4, "cred_keywords": True, "auth_fail": True}
+    return [
+        _evt("microsoft_365", "alert", "email_received", base + timedelta(seconds=i * 20), user=t,
+             asset="exchange-online", severity=3,
+             raw={**raw_common, "recipient": t, "subject": "Urgent: verify your account"})
+        for i, t in enumerate(targets)
+    ]
+
+
+# --- DET-004 Malware Execution -------------------------------------------
+
+def scenario_malware_execution(user: str | None = None) -> list[RawEvent]:
+    user = user or _pick_user()
+    asset = _asset(types=("endpoint", "server"))
+    base = _now() - timedelta(minutes=random.randint(5, 40))
+    return [
+        _evt("crowdstrike", "process", "process_start", base, user=user, asset=asset, severity=4,
+             raw={"process": "powershell.exe", "powershell_suspicious": True, "unknown_hash": True,
+                  "cmdline": "-enc aQB3AHIA...", "privileged": True}),
+        _evt("crowdstrike", "network", "process_start", base + timedelta(minutes=1), user=user, asset=asset,
+             severity=4, raw={"process": "rundll32.exe", "bad_network": True, "tamper": True}),
+        _evt("microsoft_defender", "alert", "malware_detected", base + timedelta(minutes=2), user=user,
+             asset=asset, severity=5, raw={"signature": "Trojan:Win32/Emotet", "hash_match": True}),
+    ]
+
+
+# --- DET-005 Ransomware ---------------------------------------------------
 
 def scenario_ransomware(user: str | None = None) -> list[RawEvent]:
-    """Mass file-encrypt activity on an endpoint + EDR detection."""
-    user = user or random.choice([u["username"] for u in DEMO_USERS])
-    asset = random.choice([a["name"] for a in DEMO_ASSETS if a["asset_type"] in ("endpoint", "server")])
-    base = _now() - timedelta(minutes=random.randint(5, 40))
-    evts = [RawEvent(
-        source="crowdstrike", timestamp=base, category="process", action="process_start",
-        actor_username=user, target_asset=asset, severity=3,
-        raw={"process": "vssadmin.exe", "cmdline": "delete shadows /all /quiet"},
-    )]
-    for i in range(random.randint(40, 120)):
-        evts.append(RawEvent(
-            source="microsoft_defender", timestamp=base + timedelta(seconds=i * 2),
-            category="file", action="file_rename", actor_username=user, target_asset=asset, severity=3,
-            raw={"from": f"report_{i}.docx", "to": f"report_{i}.docx.lockbit"},
-        ))
-    evts.append(RawEvent(
-        source="microsoft_defender", timestamp=base + timedelta(minutes=4), category="alert",
-        action="malware_detected", actor_username=user, target_asset=asset, severity=5,
-        raw={"signature": "Ransom:Win32/LockBit", "verdict": "blocked_partial"},
-    ))
+    user = user or _pick_user()
+    asset = _asset(types=("endpoint", "server"))
+    base = _now() - timedelta(minutes=random.randint(3, 30))
+    evts = [
+        _evt("crowdstrike", "process", "shadow_copy_delete", base, user=user, asset=asset, severity=4,
+             raw={"process": "vssadmin.exe", "cmdline": "delete shadows /all /quiet"}),
+        _evt("crowdstrike", "process", "backup_tamper", base + timedelta(seconds=20), user=user, asset=asset,
+             severity=4, raw={"action": "disabled_backup_agent"}),
+    ]
+    for i in range(random.randint(30, 90)):
+        evts.append(_evt("microsoft_defender", "file", "file_rename", base + timedelta(seconds=30 + i * 2),
+                         user=user, asset=asset, severity=3,
+                         raw={"from": f"report_{i}.docx", "to": f"report_{i}.docx.lockbit",
+                              "network_share": i % 5 == 0}))
+    evts.append(_evt("microsoft_defender", "alert", "malware_detected", base + timedelta(minutes=4),
+                     user=user, asset=asset, severity=5,
+                     raw={"signature": "Ransom:Win32/LockBit", "hash_match": True}))
     return evts
 
+
+# --- DET-006 Data Exfiltration -------------------------------------------
 
 def scenario_data_exfiltration(user: str | None = None) -> list[RawEvent]:
-    """Bulk internal download followed by upload to an external destination."""
-    user = user or random.choice([u["username"] for u in DEMO_USERS])
+    user = user or _pick_user()
     home = user_home(user)
-    asset = random.choice([a["name"] for a in DEMO_ASSETS if a["sensitivity"] >= 4])
+    asset = _asset(min_sens=4)
     base = _now() - timedelta(minutes=random.randint(10, 60))
     evts = []
-    for i in range(random.randint(30, 80)):
-        evts.append(RawEvent(
-            source="google_workspace", timestamp=base + timedelta(seconds=i * 5),
-            category="file", action="file_download", actor_username=user, country=home,
-            city=GEO[home][0], target_asset=asset, severity=2,
-            raw={"file": f"customer_db_part{i}.csv", "size_kb": random.randint(1000, 50000)},
-        ))
-    evts.append(RawEvent(
-        source="cloudflare", timestamp=base + timedelta(minutes=12), category="network",
-        action="large_upload", actor_username=user, country=home, city=GEO[home][0],
-        target_asset=asset, severity=4,
-        raw={"destination": "mega.nz", "bytes": random.randint(500_000_000, 4_000_000_000)},
-    ))
+    for i in range(random.randint(25, 70)):
+        evts.append(_evt("google_workspace", "file", "file_download", base + timedelta(seconds=i * 5),
+                         user=user, country=home, asset=asset,
+                         raw={"file": f"customer_db_part{i}.csv", "size_kb": random.randint(1000, 50000),
+                              "off_hours": True}))
+    evts.append(_evt("google_workspace", "file", "archive_create", base + timedelta(minutes=10), user=user,
+                     asset=asset, severity=3, raw={"archive": "export.7z", "encrypted": True}))
+    evts.append(_evt("cloudflare", "network", "large_upload", base + timedelta(minutes=12), user=user,
+                     country=home, asset=asset, severity=4,
+                     raw={"destination": "mega.nz", "external": True, "off_hours": True,
+                          "bytes": random.randint(500_000_000, 4_000_000_000)}))
     return evts
 
 
-def scenario_anomalous_privileged(user: str | None = None) -> list[RawEvent]:
-    """Privileged/service account behaving abnormally at odd hours."""
-    user = user or random.choice([u["username"] for u in DEMO_USERS if u["is_privileged"]])
-    home = user_home(user)
-    base = _now() - timedelta(minutes=random.randint(5, 60))
-    asset = random.choice([a["name"] for a in DEMO_ASSETS if a["sensitivity"] >= 4])
-    evts = [
-        _login("aws", user, home, "login_success", base, asset),
-        RawEvent(source="aws", timestamp=base + timedelta(minutes=2), category="process",
-                 action="privilege_escalation", actor_username=user, target_asset=asset, severity=4,
-                 raw={"role": "AdministratorAccess", "via": "AssumeRole", "hour_local": "03:00"}),
-        RawEvent(source="aws", timestamp=base + timedelta(minutes=5), category="file",
-                 action="config_change", actor_username=user, target_asset=asset, severity=3,
-                 raw={"change": "disabled_cloudtrail"}),
+# --- DET-007 Privilege Abuse ---------------------------------------------
+
+def scenario_privilege_abuse(user: str | None = None) -> list[RawEvent]:
+    user = user or _pick_user(privileged=True)
+    asset = _asset(min_sens=4)
+    base = _now() - timedelta(minutes=random.randint(5, 50))
+    return [
+        _evt("azure", "process", "admin_activity", base, user=user, asset=asset, severity=3,
+             raw={"new_device": True, "off_hours": True}),
+        _evt("azure", "process", "admin_create_user", base + timedelta(minutes=1), user=user, asset=asset,
+             severity=4, raw={"new_user": "temp_admin01"}),
+        _evt("azure", "process", "permission_change", base + timedelta(minutes=2), user=user, asset=asset,
+             severity=4, raw={"sensitive": True, "grant": "GlobalAdmin"}),
+        _evt("azure", "process", "permission_change", base + timedelta(minutes=3), user=user, asset=asset,
+             severity=3, raw={"sensitive": True, "grant": "MailboxFullAccess"}),
+        _evt("azure", "process", "permission_change", base + timedelta(minutes=4), user=user, asset=asset,
+             severity=3, raw={"sensitive": True}),
+        _evt("microsoft_defender", "alert", "security_control_disabled", base + timedelta(minutes=5),
+             user=user, asset=asset, severity=4, raw={"control": "Defender_RealTimeProtection"}),
     ]
+
+
+# --- DET-008 Security Configuration Changes ------------------------------
+
+def scenario_security_config_change(user: str | None = None) -> list[RawEvent]:
+    user = user or _pick_user(privileged=True)
+    asset = _asset(types=("server", "saas"))
+    base = _now() - timedelta(minutes=random.randint(5, 50))
+    changes = ["mfa_disabled", "firewall_rule_removed", "logging_disabled", "public_exposure"]
+    return [
+        _evt("aws", "process", "config_change", base + timedelta(minutes=i), user=user, asset=asset,
+             severity=4, raw={"change": c, "source_ip": _ip("RU")})
+        for i, c in enumerate(changes)
+    ]
+
+
+# --- DET-009 Lateral Movement --------------------------------------------
+
+def scenario_lateral_movement(user: str | None = None) -> list[RawEvent]:
+    user = user or _pick_user()
+    base = _now() - timedelta(minutes=random.randint(5, 50))
+    hosts = random.sample([a["name"] for a in DEMO_ASSETS if a["asset_type"] in ("server", "endpoint")],
+                          k=min(4, len([a for a in DEMO_ASSETS if a["asset_type"] in ("server", "endpoint")])))
+    evts = []
+    for i, host in enumerate(hosts):
+        evts.append(_evt("aws", "authentication", "remote_login", base + timedelta(minutes=i * 2), user=user,
+                         asset=host, severity=3,
+                         raw={"shared_creds": True, "admin_protocol": True, "sensitive_server": i == 0,
+                              "protocol": "WinRM"}))
+    evts.append(_evt("crowdstrike", "process", "remote_exec", base + timedelta(minutes=len(hosts) * 2),
+                     user=user, asset=hosts[-1], severity=4, raw={"tool": "PsExec"}))
     return evts
+
+
+# --- DET-010 Privilege Escalation ----------------------------------------
+
+def scenario_privilege_escalation(user: str | None = None) -> list[RawEvent]:
+    user = user or _pick_user()
+    asset = _asset(min_sens=4)
+    base = _now() - timedelta(minutes=random.randint(5, 50))
+    return [
+        _evt("aws", "process", "privilege_escalation", base, user=user, asset=asset, severity=4,
+             raw={"tool": True, "exploit": True, "cve": "CVE-2024-1234"}),
+        _evt("azure", "process", "group_add_admin", base + timedelta(minutes=1), user=user, asset=asset,
+             severity=4, raw={"group": "Domain Admins"}),
+        _evt("azure", "process", "role_change_admin", base + timedelta(minutes=2), user=user, asset=asset,
+             severity=4, raw={"role": "Owner"}),
+        _evt("aws", "process", "access_key_create", base + timedelta(minutes=3), user=user, asset=asset,
+             severity=3, raw={"key_id": "AKIA..."}),
+        _evt("azure", "process", "permission_change", base + timedelta(minutes=4), user=user, asset=asset,
+             severity=3, raw={"sensitive_granted": True}),
+    ]
 
 
 SCENARIOS = {
-    "account_takeover": scenario_account_takeover,
+    "suspicious_login": scenario_suspicious_login,
+    "account_compromise": scenario_account_compromise,
+    "phishing": scenario_phishing,
+    "malware_execution": scenario_malware_execution,
     "ransomware": scenario_ransomware,
     "data_exfiltration": scenario_data_exfiltration,
-    "anomalous_privileged": scenario_anomalous_privileged,
+    "privilege_abuse": scenario_privilege_abuse,
+    "security_config_change": scenario_security_config_change,
+    "lateral_movement": scenario_lateral_movement,
+    "privilege_escalation": scenario_privilege_escalation,
 }
 
 
@@ -154,12 +272,7 @@ def random_scenario() -> list[RawEvent]:
 
 
 def load_external_scenarios() -> list[dict]:
-    """Load any user-provided attack-model definitions from data/attack_models/.
-
-    Supports a simple JSON format: a list of {"source","action","category",...}
-    event dicts grouped under a "scenario" name. Returns [] if the folder/files
-    are absent so the platform still runs on built-ins.
-    """
+    """Load user-provided attack-model JSON files from data/attack_models/."""
     out: list[dict] = []
     if not ATTACK_MODELS_DIR.exists():
         return out

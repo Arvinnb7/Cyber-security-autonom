@@ -1,24 +1,18 @@
 """Template fallbacks for incident narrative + executive summary (F5/F6).
 
-Used when Claude is unavailable so the product is fully functional offline.
+Catalog-aware: pulls recommended_response and the human-approval policy from the
+detection definition so the offline output mirrors the AI output.
 """
 from __future__ import annotations
 
+from app.detection.catalog import APPROVAL_POLICY, get_definition
 from app.models.tables import Incident, Signal
 
-_DAMAGE = {
-    "ransomware": "Encryption of business-critical files and operational downtime; possible ransom demand.",
-    "account_takeover": "Unauthorized access to corporate data, lateral movement, and possible fraud.",
-    "data_exfiltration": "Loss of confidential/customer data, regulatory exposure, and reputational damage.",
-    "anomalous_activity": "Privileged misuse that could disable controls or stage a larger attack.",
-}
 
-_ACTION = {
-    "ransomware": "Isolate the affected host now, kill the malicious process, and restore from clean backups.",
-    "account_takeover": "Reset the user's password, revoke active sessions, and block the foreign IP.",
-    "data_exfiltration": "Suspend the account, block the upload destination, and review what left the network.",
-    "anomalous_activity": "Re-verify the privileged action with the owner and audit recent changes.",
-}
+def _damage(definition: dict | None) -> str:
+    if definition:
+        return definition.get("description_fa", "Potential security and business impact.")
+    return "Potential security and business impact."
 
 
 def template_narrative(incident: Incident, signals: list[Signal]) -> str:
@@ -34,13 +28,21 @@ def template_narrative(incident: Incident, signals: list[Signal]) -> str:
 
 def template_summary(incident: Incident, signals: list[Signal]) -> dict:
     pct = int(incident.confidence * 100)
+    definition = get_definition(incident.det_id)
+    response = definition.get("recommended_response", []) if definition else []
+    observed = [e["field"] for e in (incident.evidence or []) if e.get("observed")]
+    approval = incident.human_approval_required
     return {
         "what_happened": template_narrative(incident, signals),
         "why_it_matters": (
-            f"Risk score {incident.final_score}/100 with {pct}% confidence on a "
-            f"{'high-value' if incident.asset_risk >= 70 else 'standard'} asset."
+            f"Severity {incident.severity} · risk {incident.final_score}/100 with {pct}% confidence "
+            f"on a {'high-value' if incident.asset_risk >= 70 else 'standard'} asset."
         ),
-        "potential_damage": _DAMAGE.get(incident.threat_type, "Potential security and business impact."),
-        "recommended_action": _ACTION.get(incident.threat_type, "Investigate and contain the affected account/asset."),
+        "evidence": "Supporting evidence: " + (", ".join(observed) if observed else "see timeline")
+        + f". Triggered factors: {', '.join(incident.matched_factors or {})}.",
+        "potential_damage": _damage(definition),
+        "recommended_action": (response[0] if response else "Investigate and contain the affected account/asset."),
+        "recommended_actions": response,
+        "human_approval_required": f"{approval} — {APPROVAL_POLICY.get(approval, '')}",
         "likelihood_pct": pct,
     }

@@ -63,16 +63,29 @@ def riskiest_assets(session: Session, limit: int = 10) -> list[Asset]:
 
 
 def active_threats(session: Session) -> list[dict]:
-    """Active threats grouped by type (F9)."""
+    """Active threats grouped by catalog detection (F9)."""
     rows = session.exec(
-        select(Incident.threat_type, func.count(Incident.id), func.max(Incident.final_score))
+        select(Incident.threat_type, Incident.det_id, func.count(Incident.id), func.max(Incident.final_score))
         .where(Incident.status.in_(["open", "investigating"]))
-        .group_by(Incident.threat_type)
+        .group_by(Incident.threat_type, Incident.det_id)
     ).all()
     return [
-        {"threat_type": t, "count": c, "max_score": round(m or 0, 1)}
-        for t, c, m in sorted(rows, key=lambda r: r[2] or 0, reverse=True)
+        {"threat_type": t, "det_id": d, "count": c, "max_score": round(m or 0, 1)}
+        for t, d, c, m in sorted(rows, key=lambda r: r[3] or 0, reverse=True)
     ]
+
+
+def detections_by_severity(session: Session) -> dict[str, int]:
+    """Active-incident counts per severity band (catalog scoring_model)."""
+    rows = session.exec(
+        select(Incident.severity, func.count(Incident.id))
+        .where(Incident.status.in_(["open", "investigating"]))
+        .group_by(Incident.severity)
+    ).all()
+    counts = {"critical": 0, "high": 0, "medium": 0, "low": 0}
+    for sev, c in rows:
+        counts[sev or "low"] = c
+    return counts
 
 
 def stats_overview(session: Session) -> dict:

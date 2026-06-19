@@ -52,3 +52,10 @@ def user_home(username: str) -> str:
         if u["username"] == username:
             return u["home_country"]
     return "IR"
+
+
+_PRIVILEGED = {u["username"] for u in DEMO_USERS if u["is_privileged"]}
+
+
+def is_privileged(username: str | None) -> bool:
+    return username in _PRIVILEGED

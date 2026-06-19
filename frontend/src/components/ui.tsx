@@ -65,6 +65,31 @@ export function Spinner() {
   );
 }
 
+export const SEVERITY_COLORS: Record<string, string> = {
+  critical: "#f43f5e",
+  high: "#fb923c",
+  medium: "#facc15",
+  low: "#34d399",
+};
+
+export function SeverityPill({ severity }: { severity: string }) {
+  const color = SEVERITY_COLORS[severity] || "#94a3b8";
+  return (
+    <span className="pill capitalize" style={{ background: `${color}22`, color }}>
+      {severity}
+    </span>
+  );
+}
+
+export function ApprovalPill({ level }: { level: string }) {
+  const color = SEVERITY_COLORS[level] || "#94a3b8";
+  return (
+    <span className="pill" style={{ background: `${color}1a`, color }} title="Human approval required">
+      ⚖ approval: {level}
+    </span>
+  );
+}
+
 export function AiBadge({ on }: { on: boolean }) {
   return (
     <span className="pill" style={{ background: on ? "#38bdf822" : "#64748b22", color: on ? "#7dd3fc" : "#94a3b8" }}>

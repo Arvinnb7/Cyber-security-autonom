@@ -34,6 +34,8 @@ class Settings(BaseSettings):
     # Where user-provided attack-model files live (the plug-in point). Empty =>
     # default to <repo>/data/attack_models resolved relative to this package.
     attack_models_dir: str = ""
+    # Detection catalog (the MVP source of truth). Empty => backend/data/detection_catalog.json
+    detection_catalog_path: str = ""
 
     # --- Risk scoring weights (F4) — the heart of the product ---
     # final_score = weighted blend of the four sub-scores, then 0..100

@@ -1,0 +1,516 @@
+{
+  "catalog_name": "AI SOC MVP Detection Catalog",
+  "version": "1.0.0",
+  "language": "fa",
+  "purpose": "Initial detection catalog for an AI-powered SOC monitoring platform MVP.",
+  "scoring_model": {
+    "score_range": "0-100",
+    "score_types": [
+      "threat_score",
+      "user_risk_score",
+      "asset_risk_score",
+      "business_impact_score",
+      "final_risk_score"
+    ],
+    "severity_levels": {
+      "low": "0-30",
+      "medium": "31-60",
+      "high": "61-85",
+      "critical": "86-100"
+    }
+  },
+  "human_approval_policy": {
+    "low_risk_actions": "Can be automated if configured by the customer.",
+    "medium_risk_actions": "Recommend action, require analyst review by default.",
+    "high_risk_actions": "Require human approval before disruptive response.",
+    "critical_risk_actions": "Require immediate escalation and human approval, except containment-only actions if pre-approved."
+  },
+  "detections": [
+    {
+      "id": "DET-001",
+      "name_fa": "ورود مشکوک",
+      "name_en": "Suspicious Login",
+      "category": "Identity Security",
+      "description_fa": "شناسایی ورودهایی که از نظر مکان، دستگاه، زمان یا الگوی رفتاری با رفتار عادی کاربر متفاوت هستند.",
+      "required_data_sources": [
+        "login_logs",
+        "ip_address",
+        "geo_location",
+        "device_fingerprint",
+        "browser_information",
+        "identity_provider_logs"
+      ],
+      "detection_signals": [
+        "ورود از کشور جدید",
+        "ورود از دستگاه جدید",
+        "ورود در ساعت غیرمعمول",
+        "ورود همزمان از چند کشور",
+        "افزایش ناگهانی تلاش‌های ورود ناموفق",
+        "ورود از IP ناشناس یا پرریسک"
+      ],
+      "default_severity": "medium",
+      "scoring_factors": {
+        "new_country": 20,
+        "new_device": 15,
+        "impossible_travel": 35,
+        "unusual_time": 10,
+        "risky_ip": 25,
+        "privileged_user": 20
+      },
+      "required_evidence": [
+        "timestamp",
+        "user_id",
+        "source_ip",
+        "country",
+        "device_id",
+        "browser",
+        "previous_login_context"
+      ],
+      "recommended_response": [
+        "درخواست احراز هویت چندمرحله‌ای",
+        "بستن نشست مشکوک",
+        "هشدار به کاربر",
+        "بررسی تاریخچه ورود کاربر"
+      ],
+      "human_approval_required": "medium"
+    },
+    {
+      "id": "DET-002",
+      "name_fa": "سرقت حساب کاربری",
+      "name_en": "Account Compromise",
+      "category": "Identity Security",
+      "description_fa": "شناسایی زمانی که احتمال می‌رود حساب کاربری در اختیار فرد غیرمجاز قرار گرفته باشد.",
+      "required_data_sources": [
+        "login_logs",
+        "account_change_logs",
+        "mfa_logs",
+        "file_activity_logs",
+        "email_activity_logs",
+        "identity_provider_logs"
+      ],
+      "detection_signals": [
+        "تغییر رمز عبور پس از ورود مشکوک",
+        "تغییر یا غیرفعال‌سازی MFA",
+        "دانلود گسترده فایل‌ها",
+        "ارسال ایمیل غیرعادی",
+        "ورود از موقعیت جغرافیایی جدید",
+        "تغییر اطلاعات بازیابی حساب"
+      ],
+      "default_severity": "critical",
+      "scoring_factors": {
+        "suspicious_login_before_change": 25,
+        "mfa_disabled": 35,
+        "password_changed": 20,
+        "mass_file_download": 30,
+        "email_spam_behavior": 20,
+        "privileged_user": 25
+      },
+      "required_evidence": [
+        "user_id",
+        "login_history",
+        "account_changes",
+        "mfa_status",
+        "file_activity_summary",
+        "email_activity_summary"
+      ],
+      "recommended_response": [
+        "قفل حساب کاربری",
+        "ریست رمز عبور",
+        "لغو تمام نشست‌های فعال",
+        "بررسی فعالیت‌های اخیر کاربر",
+        "اطلاع‌رسانی به مدیر امنیت"
+      ],
+      "human_approval_required": "high"
+    },
+    {
+      "id": "DET-003",
+      "name_fa": "حمله فیشینگ",
+      "name_en": "Phishing Attack",
+      "category": "Email Security",
+      "description_fa": "شناسایی ایمیل‌های فریبنده با هدف سرقت اطلاعات، نصب بدافزار یا گرفتن دسترسی غیرمجاز.",
+      "required_data_sources": [
+        "email_logs",
+        "email_headers",
+        "url_reputation",
+        "attachment_metadata",
+        "sender_domain",
+        "user_reported_emails"
+      ],
+      "detection_signals": [
+        "دامنه مشابه برند یا سازمان",
+        "لینک مشکوک یا مخرب",
+        "ضمیمه ناشناس یا مشکوک",
+        "ارسال انبوه به کاربران سازمان",
+        "درخواست فوری برای ورود یا پرداخت",
+        "عدم تطابق دامنه فرستنده با هویت ادعایی"
+      ],
+      "default_severity": "high",
+      "scoring_factors": {
+        "lookalike_domain": 25,
+        "malicious_url": 35,
+        "suspicious_attachment": 25,
+        "mass_recipient_count": 15,
+        "credential_harvesting_keywords": 20,
+        "failed_email_authentication": 20
+      },
+      "required_evidence": [
+        "sender",
+        "recipient_list",
+        "subject",
+        "urls",
+        "attachments",
+        "email_authentication_results",
+        "delivery_timestamp"
+      ],
+      "recommended_response": [
+        "قرنطینه ایمیل",
+        "مسدودسازی دامنه",
+        "مسدودسازی URL",
+        "هشدار به کاربران دریافت‌کننده",
+        "جستجوی ایمیل مشابه در کل سازمان"
+      ],
+      "human_approval_required": "medium"
+    },
+    {
+      "id": "DET-004",
+      "name_fa": "اجرای فایل مخرب",
+      "name_en": "Malware Execution",
+      "category": "Endpoint Security",
+      "description_fa": "شناسایی اجرای فایل‌ها، اسکریپت‌ها یا پردازش‌های مشکوک روی سیستم‌های سازمان.",
+      "required_data_sources": [
+        "edr_alerts",
+        "endpoint_logs",
+        "process_logs",
+        "file_hashes",
+        "network_connections",
+        "command_line_arguments"
+      ],
+      "detection_signals": [
+        "اجرای فایل ناشناس",
+        "اجرای PowerShell مشکوک",
+        "اجرای اسکریپت از مسیر غیرعادی",
+        "ارتباط با IP یا دامنه مخرب",
+        "ایجاد پردازش فرزند مشکوک",
+        "تلاش برای غیرفعال کردن ابزار امنیتی"
+      ],
+      "default_severity": "high",
+      "scoring_factors": {
+        "unknown_file_hash": 15,
+        "malicious_hash_match": 40,
+        "suspicious_powershell": 30,
+        "malicious_network_connection": 30,
+        "security_tool_tampering": 35,
+        "privileged_execution": 20
+      },
+      "required_evidence": [
+        "hostname",
+        "user_id",
+        "process_name",
+        "process_path",
+        "command_line",
+        "file_hash",
+        "parent_process",
+        "network_destination"
+      ],
+      "recommended_response": [
+        "ایزوله کردن سیستم",
+        "متوقف کردن پردازش مخرب",
+        "قرنطینه فایل",
+        "جمع‌آوری شواهد",
+        "بررسی سیستم‌های مشابه"
+      ],
+      "human_approval_required": "high"
+    },
+    {
+      "id": "DET-005",
+      "name_fa": "رفتار مشابه باج‌افزار",
+      "name_en": "Ransomware Behavior",
+      "category": "Endpoint Security",
+      "description_fa": "شناسایی رفتارهایی که معمولاً قبل یا هنگام رمزگذاری فایل‌ها و حملات باج‌افزاری رخ می‌دهند.",
+      "required_data_sources": [
+        "file_system_events",
+        "edr_alerts",
+        "process_logs",
+        "backup_logs",
+        "shadow_copy_logs",
+        "network_share_activity"
+      ],
+      "detection_signals": [
+        "تغییر انبوه فایل‌ها در زمان کوتاه",
+        "حذف Shadow Copy",
+        "رمزگذاری سریع فایل‌ها",
+        "افزایش غیرعادی عملیات نوشتن فایل",
+        "دسترسی همزمان به Shareهای متعدد",
+        "اجرای ابزارهای شناخته‌شده باج‌افزاری"
+      ],
+      "default_severity": "critical",
+      "scoring_factors": {
+        "mass_file_modification": 35,
+        "shadow_copy_deletion": 40,
+        "rapid_encryption_pattern": 45,
+        "multiple_network_shares": 25,
+        "known_ransomware_tool": 45,
+        "backup_tampering": 35
+      },
+      "required_evidence": [
+        "hostname",
+        "user_id",
+        "affected_file_count",
+        "file_extensions",
+        "process_name",
+        "network_shares_accessed",
+        "backup_or_shadow_copy_events"
+      ],
+      "recommended_response": [
+        "ایزوله فوری دستگاه",
+        "قطع دسترسی شبکه",
+        "متوقف کردن پردازش مشکوک",
+        "حفظ شواهد",
+        "فعال‌سازی فرآیند پاسخ به حادثه"
+      ],
+      "human_approval_required": "critical"
+    },
+    {
+      "id": "DET-006",
+      "name_fa": "خروج غیرمجاز اطلاعات",
+      "name_en": "Data Exfiltration",
+      "category": "Data Security",
+      "description_fa": "شناسایی انتقال غیرعادی یا غیرمجاز اطلاعات حساس به خارج از سازمان.",
+      "required_data_sources": [
+        "network_logs",
+        "cloud_storage_logs",
+        "file_access_logs",
+        "proxy_logs",
+        "dlp_alerts",
+        "saas_activity_logs"
+      ],
+      "detection_signals": [
+        "دانلود حجیم فایل‌ها",
+        "آپلود غیرعادی به سرویس خارجی",
+        "انتقال اطلاعات به دامنه ناشناس",
+        "افزایش ناگهانی حجم ترافیک خروجی",
+        "دسترسی به فایل‌های حساس خارج از الگوی عادی",
+        "فشرده‌سازی یا رمزگذاری فایل‌ها قبل از انتقال"
+      ],
+      "default_severity": "critical",
+      "scoring_factors": {
+        "large_download_volume": 25,
+        "large_upload_volume": 30,
+        "unknown_external_service": 25,
+        "sensitive_data_access": 35,
+        "after_hours_transfer": 15,
+        "compressed_archive_creation": 20
+      },
+      "required_evidence": [
+        "user_id",
+        "source_device",
+        "destination_domain",
+        "data_volume",
+        "file_names_or_categories",
+        "timestamp",
+        "network_session_details"
+      ],
+      "recommended_response": [
+        "قطع نشست کاربر",
+        "محدودسازی دسترسی",
+        "مسدودسازی مقصد خارجی",
+        "بررسی فایل‌های منتقل‌شده",
+        "اطلاع‌رسانی فوری به مدیر امنیت"
+      ],
+      "human_approval_required": "high"
+    },
+    {
+      "id": "DET-007",
+      "name_fa": "سوءاستفاده از دسترسی ادمین",
+      "name_en": "Privilege Abuse",
+      "category": "Identity Security",
+      "description_fa": "شناسایی استفاده غیرعادی، خطرناک یا مشکوک از دسترسی‌های مدیریتی.",
+      "required_data_sources": [
+        "identity_logs",
+        "audit_logs",
+        "admin_activity_logs",
+        "iam_logs",
+        "privileged_access_management_logs"
+      ],
+      "detection_signals": [
+        "ایجاد کاربر جدید توسط ادمین",
+        "تغییر مجوزهای حساس",
+        "دسترسی ادمین خارج از ساعت کاری",
+        "غیرفعال‌سازی کنترل‌های امنیتی",
+        "استفاده از حساب ادمین از دستگاه جدید",
+        "تغییر نقش‌های مدیریتی"
+      ],
+      "default_severity": "critical",
+      "scoring_factors": {
+        "new_admin_user_created": 35,
+        "sensitive_permission_change": 30,
+        "after_hours_admin_activity": 15,
+        "security_control_disabled": 40,
+        "new_device_for_admin": 20,
+        "multiple_admin_changes": 25
+      },
+      "required_evidence": [
+        "admin_user_id",
+        "target_user_or_resource",
+        "action_type",
+        "before_after_permissions",
+        "source_ip",
+        "device_id",
+        "timestamp"
+      ],
+      "recommended_response": [
+        "تعلیق موقت دسترسی مشکوک",
+        "بررسی فوری فعالیت ادمین",
+        "بازگردانی تغییرات غیرمجاز",
+        "اطلاع‌رسانی به مالک سیستم",
+        "ثبت کامل شواهد"
+      ],
+      "human_approval_required": "critical"
+    },
+    {
+      "id": "DET-008",
+      "name_fa": "تغییرات مشکوک امنیتی",
+      "name_en": "Security Configuration Changes",
+      "category": "Security Posture",
+      "description_fa": "شناسایی تغییراتی که باعث تضعیف وضعیت امنیتی سازمان، زیرساخت ابری، فایروال یا سیستم‌های هویتی می‌شوند.",
+      "required_data_sources": [
+        "cloud_audit_logs",
+        "firewall_logs",
+        "iam_logs",
+        "security_policy_logs",
+        "configuration_change_logs"
+      ],
+      "detection_signals": [
+        "غیرفعال شدن MFA",
+        "حذف قانون امنیتی",
+        "باز شدن پورت‌های حساس",
+        "تغییر سیاست‌های دسترسی",
+        "غیرفعال شدن لاگ‌برداری",
+        "تغییر تنظیمات رمزنگاری یا بکاپ"
+      ],
+      "default_severity": "high",
+      "scoring_factors": {
+        "mfa_disabled": 35,
+        "firewall_rule_removed": 25,
+        "sensitive_port_opened": 30,
+        "logging_disabled": 40,
+        "backup_policy_weakened": 25,
+        "public_exposure_created": 35
+      },
+      "required_evidence": [
+        "resource_id",
+        "change_actor",
+        "change_type",
+        "old_configuration",
+        "new_configuration",
+        "timestamp",
+        "source_ip"
+      ],
+      "recommended_response": [
+        "بازگردانی تنظیمات امن",
+        "هشدار فوری",
+        "بررسی فرد یا سرویس اجراکننده تغییر",
+        "قفل تغییرات پرریسک تا بررسی انسانی"
+      ],
+      "human_approval_required": "high"
+    },
+    {
+      "id": "DET-009",
+      "name_fa": "حرکت جانبی مهاجم",
+      "name_en": "Lateral Movement",
+      "category": "Network Security",
+      "description_fa": "شناسایی تلاش مهاجم برای حرکت بین سیستم‌های داخلی پس از نفوذ اولیه.",
+      "required_data_sources": [
+        "authentication_logs",
+        "edr_logs",
+        "network_logs",
+        "remote_access_logs",
+        "windows_event_logs",
+        "identity_provider_logs"
+      ],
+      "detection_signals": [
+        "دسترسی به چند سرور پشت سر هم",
+        "استفاده از Credentialهای مشترک",
+        "اجرای Remote Command",
+        "اتصال غیرعادی به سیستم‌های داخلی",
+        "افزایش تلاش برای دسترسی به منابع حساس",
+        "استفاده از پروتکل‌های مدیریتی به شکل غیرعادی"
+      ],
+      "default_severity": "critical",
+      "scoring_factors": {
+        "multiple_hosts_accessed": 25,
+        "remote_execution_detected": 35,
+        "shared_credentials": 25,
+        "admin_protocol_abuse": 30,
+        "sensitive_server_access": 30,
+        "new_internal_access_pattern": 20
+      },
+      "required_evidence": [
+        "source_host",
+        "target_hosts",
+        "user_id",
+        "authentication_events",
+        "remote_execution_events",
+        "protocols_used",
+        "timestamp_sequence"
+      ],
+      "recommended_response": [
+        "ایزوله سیستم مبدا",
+        "محدودسازی دسترسی کاربر",
+        "بررسی سیستم‌های مقصد",
+        "لغو نشست‌های فعال",
+        "جمع‌آوری شواهد مسیر حرکت"
+      ],
+      "human_approval_required": "critical"
+    },
+    {
+      "id": "DET-010",
+      "name_fa": "ارتقای سطح دسترسی",
+      "name_en": "Privilege Escalation",
+      "category": "Identity Security",
+      "description_fa": "شناسایی تلاش برای گرفتن دسترسی بالاتر از سطح مجاز در سیستم، سرویس ابری یا ساختار هویتی سازمان.",
+      "required_data_sources": [
+        "edr_logs",
+        "identity_logs",
+        "audit_logs",
+        "iam_logs",
+        "process_logs",
+        "group_membership_logs"
+      ],
+      "detection_signals": [
+        "اضافه شدن کاربر به گروه ادمین",
+        "اجرای ابزارهای افزایش دسترسی",
+        "تغییر Role یا Permission",
+        "استفاده از آسیب‌پذیری برای افزایش دسترسی",
+        "تغییر مالکیت فایل‌ها یا سرویس‌ها",
+        "ایجاد Token یا کلید دسترسی جدید"
+      ],
+      "default_severity": "critical",
+      "scoring_factors": {
+        "added_to_admin_group": 35,
+        "privilege_escalation_tool": 40,
+        "role_changed_to_admin": 35,
+        "exploit_behavior": 40,
+        "new_access_key_created": 25,
+        "sensitive_permission_granted": 30
+      },
+      "required_evidence": [
+        "user_id",
+        "target_role_or_group",
+        "permission_change",
+        "process_or_tool_used",
+        "source_host",
+        "timestamp",
+        "before_after_access_level"
+      ],
+      "recommended_response": [
+        "لغو دسترسی جدید",
+        "تعلیق حساب مشکوک",
+        "بررسی فعالیت‌های اخیر",
+        "بازگردانی سطح دسترسی قبلی",
+        "اطلاع‌رسانی فوری به مدیر امنیت"
+      ],
+      "human_approval_required": "critical"
+    }
+  ]
+}

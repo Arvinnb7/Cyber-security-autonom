@@ -70,6 +70,8 @@ export const api = {
       method: "POST",
       body: JSON.stringify({ question, history }),
     }),
+  detections: () => request<any[]>("/detections"),
+  detection: (detId: string) => request<any>(`/detections/${detId}`),
   reports: () => request<any[]>("/reports"),
   report: (id: number) => request<any>(`/reports/${id}`),
   generateReport: () => request<any>("/reports/generate", { method: "POST" }),

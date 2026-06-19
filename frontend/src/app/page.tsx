@@ -35,7 +35,13 @@ export default function Dashboard() {
 
   if (!data) return <Spinner />;
 
-  const { org_risk, stats, active_threats, top_incidents, risky_users, risky_assets } = data;
+  const { org_risk, stats, active_threats, by_severity, top_incidents, risky_users, risky_assets } = data;
+  const SEV = [
+    ["critical", "#f43f5e"],
+    ["high", "#fb923c"],
+    ["medium", "#facc15"],
+    ["low", "#34d399"],
+  ] as const;
 
   return (
     <>
@@ -60,6 +66,19 @@ export default function Dashboard() {
             <Metric label="Active incidents" value={org_risk.active_incidents} />
             <Metric label="Events ingested" value={stats.total_events} />
           </div>
+          <div className="mt-4">
+            <div className="mb-2 text-xs uppercase tracking-wide text-slate-500">Detections by severity</div>
+            <div className="grid grid-cols-4 gap-2">
+              {SEV.map(([label, color]) => (
+                <div key={label} className="rounded-lg border border-ink-700/60 bg-ink-850/60 py-2 text-center">
+                  <div className="text-lg font-semibold" style={{ color }}>
+                    {by_severity?.[label] ?? 0}
+                  </div>
+                  <div className="text-[10px] uppercase tracking-wide text-slate-500">{label}</div>
+                </div>
+              ))}
+            </div>
+          </div>
         </div>
 
         <div className="card lg:col-span-2">
@@ -67,12 +86,14 @@ export default function Dashboard() {
           <div className="grid gap-3 sm:grid-cols-2">
             {active_threats.length === 0 && <p className="text-sm text-slate-500">No active threats.</p>}
             {active_threats.map((t: any) => (
-              <div key={t.threat_type} className="rounded-xl border border-ink-700/60 bg-ink-850/60 p-4">
+              <div key={`${t.det_id}-${t.threat_type}`} className="rounded-xl border border-ink-700/60 bg-ink-850/60 p-4">
                 <div className="flex items-center justify-between">
                   <span className="font-medium text-white">{threatLabel(t.threat_type)}</span>
                   <RiskPill score={t.max_score} />
                 </div>
-                <div className="mt-1 text-xs text-slate-400">{t.count} active incident(s)</div>
+                <div className="mt-1 text-xs text-slate-400">
+                  <span className="font-mono text-accent-soft">{t.det_id}</span> · {t.count} active incident(s)
+                </div>
               </div>
             ))}
           </div>

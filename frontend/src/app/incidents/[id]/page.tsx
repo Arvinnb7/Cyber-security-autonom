@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
-import { AiBadge, PageHeader, RiskPill, ScoreBar, Spinner, StatusPill } from "@/components/ui";
+import { AiBadge, ApprovalPill, PageHeader, RiskPill, ScoreBar, SeverityPill, Spinner, StatusPill } from "@/components/ui";
 import { api, threatLabel } from "@/lib/api";
 
 export default function IncidentDetail() {
@@ -52,11 +52,15 @@ export default function IncidentDetail() {
     <>
       <PageHeader
         title={inc.title}
-        subtitle={`#${inc.id} · ${threatLabel(inc.threat_type)} · detected ${new Date(inc.created_at).toLocaleString()}`}
+        subtitle={`${inc.det_id} · ${threatLabel(inc.threat_type)} · detected ${new Date(inc.created_at).toLocaleString()}`}
         right={
-          <Link href="/incidents" className="btn">
-            ← Back
-          </Link>
+          <div className="flex items-center gap-2">
+            <SeverityPill severity={inc.severity} />
+            <ApprovalPill level={inc.human_approval_required} />
+            <Link href="/incidents" className="btn">
+              ← Back
+            </Link>
+          </div>
         }
       />
 
@@ -81,8 +85,46 @@ export default function IncidentDetail() {
             <div className="grid gap-3 sm:grid-cols-2">
               <SummaryCell label="What happened" value={summary.what_happened} />
               <SummaryCell label="Why it matters" value={summary.why_it_matters} />
+              <SummaryCell label="Supporting evidence" value={summary.evidence} />
               <SummaryCell label="Potential damage" value={summary.potential_damage} />
               <SummaryCell label="Recommended action" value={summary.recommended_action} accent />
+              <SummaryCell label="Human approval" value={summary.human_approval_required} />
+            </div>
+          </div>
+
+          <div className="card">
+            <h2 className="mb-3 text-sm font-medium text-slate-300">Evidence & matched factors</h2>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div>
+                <div className="mb-2 text-[11px] uppercase tracking-wide text-slate-500">Required evidence</div>
+                <ul className="space-y-1 text-sm">
+                  {(inc.evidence || []).map((e: any) => (
+                    <li key={e.field} className="flex items-center justify-between gap-2">
+                      <span className="font-mono text-xs text-slate-400">{e.field}</span>
+                      <span className={e.observed ? "text-slate-200" : "text-slate-600"}>
+                        {e.observed ? (
+                          <span className="truncate" title={e.value}>{e.value}</span>
+                        ) : (
+                          "—"
+                        )}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+              <div>
+                <div className="mb-2 text-[11px] uppercase tracking-wide text-slate-500">
+                  Scoring factors (→ threat score)
+                </div>
+                <ul className="space-y-1 text-sm">
+                  {Object.entries(inc.matched_factors || {}).map(([k, v]: any) => (
+                    <li key={k} className="flex items-center justify-between gap-2">
+                      <span className="text-slate-300">{threatLabel(k)}</span>
+                      <span className="font-mono text-accent-soft">+{v as number}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
             </div>
           </div>
 

@@ -21,7 +21,15 @@ from app.models.schemas import (
     StatusUpdate,
     Token,
 )
-from app.models.tables import Asset, AuditAction, Incident, Signal, User, WeeklyReport
+from app.models.tables import (
+    Asset,
+    AuditAction,
+    DetectionDefinition,
+    Incident,
+    Signal,
+    User,
+    WeeklyReport,
+)
 from app.response import actions as response_actions
 from app.services import analytics
 
@@ -67,6 +75,7 @@ def dashboard_overview(_: str = Auth, session: Session = DB) -> dict:
         "org_risk": analytics.org_risk(session),
         "stats": analytics.stats_overview(session),
         "active_threats": analytics.active_threats(session),
+        "by_severity": analytics.detections_by_severity(session),
         "top_incidents": [_incident_brief(i) for i in analytics.top_incidents(session, 8)],
         "risky_users": [_user_brief(u) for u in analytics.riskiest_users(session, 6)],
         "risky_assets": [_asset_brief(a) for a in analytics.riskiest_assets(session, 6)],
@@ -201,6 +210,59 @@ def generate_report(_: str = Auth, session: Session = DB) -> dict:
     return report.model_dump()
 
 
+# --- Detection catalog CRUD (MVP source of truth) -------------------------
+
+@api_router.get("/detections")
+def list_detections(_: str = Auth, session: Session = DB) -> list[dict]:
+    rows = session.exec(select(DetectionDefinition).order_by(DetectionDefinition.det_id)).all()
+    return [d.model_dump() for d in rows]
+
+
+@api_router.get("/detections/{det_id}")
+def get_detection(det_id: str, _: str = Auth, session: Session = DB) -> dict:
+    d = session.exec(select(DetectionDefinition).where(DetectionDefinition.det_id == det_id)).first()
+    if d is None:
+        raise HTTPException(status_code=404, detail="detection not found")
+    return d.model_dump()
+
+
+@api_router.post("/detections")
+def create_detection(body: dict, _: str = Auth, session: Session = DB) -> dict:
+    if not body.get("det_id"):
+        raise HTTPException(status_code=400, detail="det_id is required")
+    if session.exec(select(DetectionDefinition).where(DetectionDefinition.det_id == body["det_id"])).first():
+        raise HTTPException(status_code=409, detail="det_id already exists")
+    d = DetectionDefinition(**{k: v for k, v in body.items() if k in DetectionDefinition.model_fields})
+    session.add(d)
+    session.commit()
+    session.refresh(d)
+    return d.model_dump()
+
+
+@api_router.put("/detections/{det_id}")
+def update_detection(det_id: str, body: dict, _: str = Auth, session: Session = DB) -> dict:
+    d = session.exec(select(DetectionDefinition).where(DetectionDefinition.det_id == det_id)).first()
+    if d is None:
+        raise HTTPException(status_code=404, detail="detection not found")
+    for k, v in body.items():
+        if k in DetectionDefinition.model_fields and k not in ("id", "det_id"):
+            setattr(d, k, v)
+    session.add(d)
+    session.commit()
+    session.refresh(d)
+    return d.model_dump()
+
+
+@api_router.delete("/detections/{det_id}")
+def delete_detection(det_id: str, _: str = Auth, session: Session = DB) -> dict:
+    d = session.exec(select(DetectionDefinition).where(DetectionDefinition.det_id == det_id)).first()
+    if d is None:
+        raise HTTPException(status_code=404, detail="detection not found")
+    session.delete(d)
+    session.commit()
+    return {"ok": True, "deleted": det_id}
+
+
 # --- Demo control ---------------------------------------------------------
 
 @api_router.post("/control/inject")
@@ -227,8 +289,9 @@ def run_cycle(_: str = Auth, session: Session = DB) -> dict:
 
 def _incident_brief(i: Incident) -> dict:
     return {
-        "id": i.id, "title": i.title, "threat_type": i.threat_type, "status": i.status,
-        "actor_username": i.actor_username, "target_asset": i.target_asset,
+        "id": i.id, "title": i.title, "threat_type": i.threat_type, "det_id": i.det_id,
+        "severity": i.severity, "status": i.status, "actor_username": i.actor_username,
+        "target_asset": i.target_asset, "human_approval_required": i.human_approval_required,
         "confidence": i.confidence, "final_score": i.final_score,
         "created_at": i.created_at, "updated_at": i.updated_at,
     }
@@ -242,6 +305,7 @@ def _incident_full(i: Incident) -> dict:
             "asset_risk": i.asset_risk, "business_impact": i.business_impact,
             "final_score": i.final_score,
         },
+        "matched_factors": i.matched_factors, "evidence": i.evidence,
         "ai_analysis": i.ai_analysis, "ai_summary": i.ai_summary,
         "ai_generated": i.ai_generated, "timeline": i.timeline,
     }

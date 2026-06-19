@@ -1,6 +1,7 @@
 from app.models.tables import (
     Asset,
     AuditAction,
+    DetectionDefinition,
     Event,
     Incident,
     Signal,
@@ -11,6 +12,7 @@ from app.models.tables import (
 __all__ = [
     "Asset",
     "AuditAction",
+    "DetectionDefinition",
     "Event",
     "Incident",
     "Signal",

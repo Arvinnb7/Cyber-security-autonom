@@ -22,6 +22,26 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+class DetectionDefinition(SQLModel, table=True):
+    """A detection from the MVP catalog (source of truth, DET-001..DET-010)."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    det_id: str = Field(index=True, unique=True)      # e.g. "DET-005"
+    name_en: str = ""
+    name_fa: str = ""
+    category: str = ""
+    description_fa: str = ""
+    default_severity: str = "medium"                  # low|medium|high|critical
+    required_data_sources: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    detection_signals: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    scoring_factors: dict[str, int] = Field(default_factory=dict, sa_column=Column(JSON))
+    required_evidence: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    recommended_response: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    human_approval_required: str = "high"             # low|medium|high|critical
+    enabled: bool = True
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 class User(SQLModel, table=True):
     """A monitored identity in the protected organization."""
 
@@ -75,12 +95,15 @@ class Signal(SQLModel, table=True):
 
     id: Optional[int] = Field(default=None, primary_key=True)
     detector: str = Field(index=True)            # e.g. "impossible_travel"
+    det_id: str = Field(default="", index=True)  # catalog id, e.g. "DET-005"
     threat_type: str = ""                        # e.g. "account_takeover"
     actor_username: Optional[str] = Field(default=None, index=True)
     target_asset: Optional[str] = None
     severity: int = 3                            # 1..5
     confidence: float = 0.5                      # 0..1
     description: str = ""
+    # Which catalog scoring_factors fired and their points (drives threat_score).
+    matched_factors: dict[str, int] = Field(default_factory=dict, sa_column=Column(JSON))
     event_ids: list[int] = Field(default_factory=list, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utcnow, index=True)
     incident_id: Optional[int] = Field(default=None, foreign_key="incident.id", index=True)
@@ -92,6 +115,9 @@ class Incident(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     title: str = ""
     threat_type: str = ""
+    det_id: str = Field(default="", index=True)       # catalog detection id
+    severity: str = Field(default="medium", index=True)  # low|medium|high|critical (from final_score)
+    human_approval_required: str = "high"             # from catalog
     status: str = Field(default="open", index=True)   # open | investigating | resolved | dismissed
     actor_username: Optional[str] = Field(default=None, index=True)
     target_asset: Optional[str] = None
@@ -108,6 +134,10 @@ class Incident(SQLModel, table=True):
     ai_analysis: str = ""                                 # narrative (F5)
     ai_summary: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))  # F6
     ai_generated: bool = False                            # True if Claude, False if template fallback
+
+    # Catalog-aligned investigation context.
+    matched_factors: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    evidence: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
 
     timeline: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     created_at: datetime = Field(default_factory=utcnow, index=True)

@@ -1,12 +1,13 @@
-"""Seed the demo organization and an initial set of incidents."""
+"""Seed the catalog, the demo organization, and an initial set of incidents."""
 from __future__ import annotations
 
 import logging
 
 from sqlmodel import Session, select
 
+from app.detection.catalog import seed_catalog
 from app.ingestion.pipeline import analyze, ingest_raw_events
-from app.models.tables import Asset, User
+from app.models.tables import Asset, Incident, User
 from app.simulation.org import DEMO_ASSETS, DEMO_USERS
 from app.simulation.scenarios import SCENARIOS, generate_scenario
 
@@ -14,7 +15,6 @@ logger = logging.getLogger("sentinel.seed")
 
 
 def seed_org(session: Session) -> None:
-    """Insert demo users and assets if not present."""
     if session.exec(select(User)).first() is None:
         for u in DEMO_USERS:
             session.add(User(**u))
@@ -25,9 +25,8 @@ def seed_org(session: Session) -> None:
 
 
 def seed_scenarios(session: Session) -> int:
-    """Generate one incident per built-in scenario type plus a couple extras."""
-    names = list(SCENARIOS) + ["account_takeover", "ransomware"]
-    for name in names:
+    """Generate one incident for each of the 10 catalog detections."""
+    for name in SCENARIOS:
         ingest_raw_events(session, generate_scenario(name))
     count = analyze(session)
     logger.info("seeded %d initial incidents", count)
@@ -35,8 +34,9 @@ def seed_scenarios(session: Session) -> int:
 
 
 def seed_all(session: Session) -> None:
+    added = seed_catalog(session)
+    if added:
+        logger.info("seeded %d catalog detections", added)
     seed_org(session)
-    from app.models.tables import Incident
-
     if session.exec(select(Incident)).first() is None:
         seed_scenarios(session)
