@@ -1,0 +1,20 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+.pytest_cache/
+*.db
+.env
+
+# Node / Next
+node_modules/
+.next/
+out/
+npm-debug.log*
+.DS_Store
+
+# Editors
+.vscode/
+.idea/

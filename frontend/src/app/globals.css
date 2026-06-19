@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  @apply bg-ink-950 text-slate-200;
+  background-image: radial-gradient(1200px 600px at 80% -10%, rgba(56, 189, 248, 0.08), transparent),
+    radial-gradient(900px 500px at -10% 110%, rgba(244, 63, 94, 0.06), transparent);
+}
+
+@layer components {
+  .card {
+    @apply rounded-2xl border border-ink-700/60 bg-ink-900/70 p-5 shadow-glow backdrop-blur;
+  }
+  .pill {
+    @apply inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl border border-ink-600 bg-ink-800
+      px-3.5 py-2 text-sm font-medium text-slate-100 transition hover:border-accent/60 hover:bg-ink-700
+      disabled:cursor-not-allowed disabled:opacity-50;
+  }
+  .btn-accent {
+    @apply border-accent/40 bg-accent/15 text-accent-soft hover:bg-accent/25;
+  }
+  .btn-danger {
+    @apply border-risk-critical/40 bg-risk-critical/10 text-risk-critical hover:bg-risk-critical/20;
+  }
+  .nav-link {
+    @apply flex items-center gap-3 rounded-xl px-3 py-2.5 text-sm text-slate-400 transition
+      hover:bg-ink-800 hover:text-slate-100;
+  }
+  .nav-link-active {
+    @apply bg-accent/15 text-accent-soft;
+  }
+}
+
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { @apply rounded-full bg-ink-700; }

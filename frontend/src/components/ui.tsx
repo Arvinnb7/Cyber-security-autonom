@@ -1,0 +1,74 @@
+"use client";
+
+import { riskBand, riskColor } from "@/lib/api";
+
+export function PageHeader({ title, subtitle, right }: { title: string; subtitle?: string; right?: React.ReactNode }) {
+  return (
+    <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight text-white">{title}</h1>
+        {subtitle && <p className="mt-1 text-sm text-slate-400">{subtitle}</p>}
+      </div>
+      {right}
+    </div>
+  );
+}
+
+export function RiskPill({ score }: { score: number }) {
+  const color = riskColor(score);
+  return (
+    <span className="pill" style={{ background: `${color}22`, color }}>
+      <span className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />
+      {riskBand(score)} · {Math.round(score)}
+    </span>
+  );
+}
+
+export function StatusPill({ status }: { status: string }) {
+  const map: Record<string, string> = {
+    open: "#f43f5e",
+    investigating: "#fb923c",
+    resolved: "#34d399",
+    dismissed: "#64748b",
+    pending: "#facc15",
+    executed: "#34d399",
+    rejected: "#64748b",
+  };
+  const color = map[status] || "#94a3b8";
+  return (
+    <span className="pill capitalize" style={{ background: `${color}22`, color }}>
+      {status}
+    </span>
+  );
+}
+
+export function ScoreBar({ label, value }: { label: string; value: number }) {
+  const color = riskColor(value);
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between text-xs">
+        <span className="text-slate-400">{label}</span>
+        <span className="font-mono" style={{ color }}>{Math.round(value)}</span>
+      </div>
+      <div className="h-2 overflow-hidden rounded-full bg-ink-800">
+        <div className="h-full rounded-full transition-all" style={{ width: `${value}%`, background: color }} />
+      </div>
+    </div>
+  );
+}
+
+export function Spinner() {
+  return (
+    <div className="flex items-center justify-center py-20 text-slate-500">
+      <span className="h-5 w-5 animate-spin rounded-full border-2 border-ink-600 border-t-accent" />
+    </div>
+  );
+}
+
+export function AiBadge({ on }: { on: boolean }) {
+  return (
+    <span className="pill" style={{ background: on ? "#38bdf822" : "#64748b22", color: on ? "#7dd3fc" : "#94a3b8" }}>
+      {on ? "✦ Claude analysis" : "rule-based summary"}
+    </span>
+  );
+}

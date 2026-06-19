@@ -1,0 +1,35 @@
+{
+  "name": "okta_session_hijack",
+  "threat_type": "account_takeover",
+  "description": "Valid session token stolen via infostealer and replayed from a new ASN/country within minutes.",
+  "events": [
+    {
+      "source": "okta",
+      "category": "authentication",
+      "action": "login_success",
+      "actor_username": "n.ahmadi",
+      "country": "IR",
+      "severity": 2,
+      "raw": { "device": "managed-laptop", "mfa": true }
+    },
+    {
+      "source": "okta",
+      "category": "authentication",
+      "action": "session_replay",
+      "actor_username": "n.ahmadi",
+      "country": "RU",
+      "severity": 4,
+      "raw": { "asn": "AS12345", "token_age_min": 6, "device": "unknown" }
+    },
+    {
+      "source": "google_workspace",
+      "category": "file",
+      "action": "file_download",
+      "actor_username": "n.ahmadi",
+      "country": "RU",
+      "target_asset": "crm-salesforce",
+      "severity": 2,
+      "raw": { "file": "all_customers_export.csv", "size_kb": 184000 }
+    }
+  ]
+}

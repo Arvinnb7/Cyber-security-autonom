@@ -1,0 +1,25 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      # Set your key here to enable real Claude analysis (optional).
+      SENTINEL_ANTHROPIC_API_KEY: ${SENTINEL_ANTHROPIC_API_KEY:-}
+      SENTINEL_DATABASE_URL: sqlite:////data/sentinel.db
+      SENTINEL_ATTACK_MODELS_DIR: /attack_models
+    volumes:
+      - sentinel-data:/data
+      - ./data/attack_models:/attack_models:ro
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "3000:3000"
+    environment:
+      BACKEND_URL: http://backend:8000
+    depends_on:
+      - backend
+
+volumes:
+  sentinel-data:
