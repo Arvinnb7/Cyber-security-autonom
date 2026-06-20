@@ -1,6 +1,7 @@
 "use client";
 
 import { riskBand, riskColor } from "@/lib/api";
+import { useLang } from "@/lib/i18n";
 
 export function PageHeader({ title, subtitle, right }: { title: string; subtitle?: string; right?: React.ReactNode }) {
   return (
@@ -15,16 +16,18 @@ export function PageHeader({ title, subtitle, right }: { title: string; subtitle
 }
 
 export function RiskPill({ score }: { score: number }) {
+  const { t } = useLang();
   const color = riskColor(score);
   return (
     <span className="pill" style={{ background: `${color}22`, color }}>
       <span className="h-1.5 w-1.5 rounded-full" style={{ background: color }} />
-      {riskBand(score)} · {Math.round(score)}
+      {t(`band.${riskBand(score)}`)} · {Math.round(score)}
     </span>
   );
 }
 
 export function StatusPill({ status }: { status: string }) {
+  const { t } = useLang();
   const map: Record<string, string> = {
     open: "#f43f5e",
     investigating: "#fb923c",
@@ -36,8 +39,8 @@ export function StatusPill({ status }: { status: string }) {
   };
   const color = map[status] || "#94a3b8";
   return (
-    <span className="pill capitalize" style={{ background: `${color}22`, color }}>
-      {status}
+    <span className="pill" style={{ background: `${color}22`, color }}>
+      {t(`status.${status}`)}
     </span>
   );
 }
@@ -73,27 +76,30 @@ export const SEVERITY_COLORS: Record<string, string> = {
 };
 
 export function SeverityPill({ severity }: { severity: string }) {
+  const { t } = useLang();
   const color = SEVERITY_COLORS[severity] || "#94a3b8";
   return (
-    <span className="pill capitalize" style={{ background: `${color}22`, color }}>
-      {severity}
+    <span className="pill" style={{ background: `${color}22`, color }}>
+      {t(`sev.${severity}`)}
     </span>
   );
 }
 
 export function ApprovalPill({ level }: { level: string }) {
+  const { t } = useLang();
   const color = SEVERITY_COLORS[level] || "#94a3b8";
   return (
     <span className="pill" style={{ background: `${color}1a`, color }} title="Human approval required">
-      ⚖ approval: {level}
+      ⚖ {t("badge.approval")}: {t(`sev.${level}`)}
     </span>
   );
 }
 
 export function AiBadge({ on }: { on: boolean }) {
+  const { t } = useLang();
   return (
     <span className="pill" style={{ background: on ? "#38bdf822" : "#64748b22", color: on ? "#7dd3fc" : "#94a3b8" }}>
-      {on ? "✦ Claude analysis" : "rule-based summary"}
+      {on ? t("badge.claude") : t("badge.rulebased")}
     </span>
   );
 }

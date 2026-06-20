@@ -3,8 +3,10 @@
 import { useEffect, useState } from "react";
 import { ApprovalPill, PageHeader, SeverityPill, Spinner } from "@/components/ui";
 import { api, threatLabel } from "@/lib/api";
+import { useLang } from "@/lib/i18n";
 
 export default function DetectionsPage() {
+  const { t, lang } = useLang();
   const [items, setItems] = useState<any[] | null>(null);
   const [active, setActive] = useState<any>(null);
 
@@ -17,12 +19,11 @@ export default function DetectionsPage() {
 
   if (!items) return <Spinner />;
 
+  const name = (d: any) => (lang === "fa" && d.name_fa ? d.name_fa : d.name_en);
+
   return (
     <>
-      <PageHeader
-        title="Detection Catalog"
-        subtitle="The MVP source of truth — 10 detections, their scoring factors and approval policy"
-      />
+      <PageHeader title={t("nav.detections")} subtitle={t("cat.subtitle")} />
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="card lg:col-span-1">
           <div className="space-y-1.5">
@@ -30,12 +31,12 @@ export default function DetectionsPage() {
               <button
                 key={d.det_id}
                 onClick={() => setActive(d)}
-                className={`w-full rounded-lg px-3 py-2.5 text-left hover:bg-ink-800 ${
+                className={`w-full rounded-lg px-3 py-2.5 text-start hover:bg-ink-800 ${
                   active?.det_id === d.det_id ? "bg-ink-800" : ""
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-sm text-slate-200">{d.name_en}</span>
+                  <span className="text-sm text-slate-200">{name(d)}</span>
                   <SeverityPill severity={d.default_severity} />
                 </div>
                 <div className="text-xs text-slate-500">
@@ -50,7 +51,7 @@ export default function DetectionsPage() {
           <div className="card lg:col-span-2">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-2">
               <div>
-                <h2 className="text-lg font-semibold text-white">{active.name_en}</h2>
+                <h2 className="text-lg font-semibold text-white">{name(active)}</h2>
                 <p className="text-sm text-slate-400" dir="rtl">{active.name_fa}</p>
               </div>
               <div className="flex items-center gap-2">
@@ -61,7 +62,7 @@ export default function DetectionsPage() {
             <p className="mb-5 text-sm text-slate-300" dir="rtl">{active.description_fa}</p>
 
             <div className="grid gap-5 sm:grid-cols-2">
-              <Block title="Scoring factors">
+              <Block title={t("cat.scoringFactors")}>
                 <ul className="space-y-1 text-sm">
                   {Object.entries(active.scoring_factors || {}).map(([k, v]: any) => (
                     <li key={k} className="flex items-center justify-between">
@@ -71,24 +72,24 @@ export default function DetectionsPage() {
                   ))}
                 </ul>
               </Block>
-              <Block title="Detection signals">
-                <ul className="list-disc space-y-1 pl-4 text-sm text-slate-300" dir="rtl">
-                  {(active.detection_signals || []).map((s: string) => (
-                    <li key={s}>{s}</li>
+              <Block title={t("cat.signals")}>
+                <ul className="list-disc space-y-1 pe-4 text-sm text-slate-300" dir="rtl">
+                  {(active.detection_signals || []).map((sig: string) => (
+                    <li key={sig}>{sig}</li>
                   ))}
                 </ul>
               </Block>
-              <Block title="Required data sources">
+              <Block title={t("cat.dataSources")}>
                 <div className="flex flex-wrap gap-1.5">
-                  {(active.required_data_sources || []).map((s: string) => (
-                    <span key={s} className="pill bg-ink-800 font-mono text-slate-400">{s}</span>
+                  {(active.required_data_sources || []).map((src: string) => (
+                    <span key={src} className="pill bg-ink-800 font-mono text-slate-400">{src}</span>
                   ))}
                 </div>
               </Block>
-              <Block title="Recommended response">
-                <ul className="list-disc space-y-1 pl-4 text-sm text-slate-300" dir="rtl">
-                  {(active.recommended_response || []).map((s: string) => (
-                    <li key={s}>{s}</li>
+              <Block title={t("cat.response")}>
+                <ul className="list-disc space-y-1 pe-4 text-sm text-slate-300" dir="rtl">
+                  {(active.recommended_response || []).map((r: string) => (
+                    <li key={r}>{r}</li>
                   ))}
                 </ul>
               </Block>

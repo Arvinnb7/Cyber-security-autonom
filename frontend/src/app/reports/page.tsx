@@ -3,8 +3,10 @@
 import { useEffect, useState } from "react";
 import { AiBadge, PageHeader, Spinner } from "@/components/ui";
 import { api } from "@/lib/api";
+import { useLang } from "@/lib/i18n";
 
 export default function ReportsPage() {
+  const { t } = useLang();
   const [reports, setReports] = useState<any[] | null>(null);
   const [active, setActive] = useState<any>(null);
   const [busy, setBusy] = useState(false);
@@ -36,18 +38,18 @@ export default function ReportsPage() {
   return (
     <>
       <PageHeader
-        title="Weekly Reports"
-        subtitle="Auto-generated executive summaries: what happened, what's resolved, what needs action"
+        title={t("nav.reports")}
+        subtitle={t("reports.subtitle")}
         right={
           <button className="btn btn-accent" onClick={generate} disabled={busy}>
-            {busy ? "Generating…" : "＋ Generate now"}
+            {busy ? t("reports.generating") : t("reports.generate")}
           </button>
         }
       />
       <div className="grid gap-5 lg:grid-cols-4">
         <div className="card lg:col-span-1">
-          <h2 className="mb-3 text-sm font-medium text-slate-300">History</h2>
-          {reports.length === 0 && <p className="text-sm text-slate-500">No reports yet. Generate one.</p>}
+          <h2 className="mb-3 text-sm font-medium text-slate-300">{t("reports.history")}</h2>
+          {reports.length === 0 && <p className="text-sm text-slate-500">{t("reports.empty")}</p>}
           <div className="space-y-1.5">
             {reports.map((r) => (
               <button
@@ -58,7 +60,7 @@ export default function ReportsPage() {
                 }`}
               >
                 <div>{new Date(r.period_end).toLocaleDateString()}</div>
-                <div className="text-xs text-slate-500">{r.stats?.total_incidents ?? 0} incidents</div>
+                <div className="text-xs text-slate-500">{r.stats?.total_incidents ?? 0} {t("reports.incidents")}</div>
               </button>
             ))}
           </div>
@@ -77,7 +79,7 @@ export default function ReportsPage() {
               <MiniMarkdown text={active.content_md} />
             </>
           ) : (
-            <p className="text-sm text-slate-500">Select or generate a report.</p>
+            <p className="text-sm text-slate-500">{t("reports.select")}</p>
           )}
         </div>
       </div>

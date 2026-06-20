@@ -4,19 +4,21 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { clearToken, getToken } from "@/lib/api";
+import { useLang } from "@/lib/i18n";
 
 const NAV = [
-  { href: "/", label: "Dashboard", icon: "▤" },
-  { href: "/incidents", label: "Incidents", icon: "◆" },
-  { href: "/detections", label: "Detection Catalog", icon: "◈" },
-  { href: "/users", label: "Users & Assets", icon: "◉" },
-  { href: "/chat", label: "Security Assistant", icon: "✦" },
-  { href: "/reports", label: "Weekly Reports", icon: "▥" },
+  { href: "/", key: "nav.dashboard", icon: "▤" },
+  { href: "/incidents", key: "nav.incidents", icon: "◆" },
+  { href: "/detections", key: "nav.detections", icon: "◈" },
+  { href: "/users", key: "nav.users", icon: "◉" },
+  { href: "/chat", key: "nav.chat", icon: "✦" },
+  { href: "/reports", key: "nav.reports", icon: "▥" },
 ];
 
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const { t, lang, setLang } = useLang();
   const [ready, setReady] = useState(false);
   const isLogin = pathname === "/login";
 
@@ -40,7 +42,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
           <div>
             <div className="text-lg font-semibold tracking-tight text-white">Sentinel</div>
-            <div className="text-[11px] uppercase tracking-widest text-slate-500">Autonomous SOC</div>
+            <div className="text-[11px] uppercase tracking-widest text-slate-500">{t("brand.tag")}</div>
           </div>
         </div>
         <nav className="flex flex-1 flex-col gap-1">
@@ -49,19 +51,26 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             return (
               <Link key={item.href} href={item.href} className={`nav-link ${active ? "nav-link-active" : ""}`}>
                 <span className="w-4 text-center opacity-70">{item.icon}</span>
-                {item.label}
+                {t(item.key)}
               </Link>
             );
           })}
         </nav>
         <button
-          className="nav-link mt-2 text-left"
+          className="nav-link mt-2"
+          onClick={() => setLang(lang === "fa" ? "en" : "fa")}
+          title="Change language / تغییر زبان"
+        >
+          <span className="w-4 text-center opacity-70">🌐</span> {t("lang.toggle")}
+        </button>
+        <button
+          className="nav-link"
           onClick={() => {
             clearToken();
             router.replace("/login");
           }}
         >
-          <span className="w-4 text-center opacity-70">⎋</span> Sign out
+          <span className="w-4 text-center opacity-70">⎋</span> {t("nav.signout")}
         </button>
       </aside>
 

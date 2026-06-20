@@ -3,9 +3,11 @@
 import { useRouter } from "next/navigation";
 import { useState } from "react";
 import { api } from "@/lib/api";
+import { useLang } from "@/lib/i18n";
 
 export default function LoginPage() {
   const router = useRouter();
+  const { t, lang, setLang } = useLang();
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("admin");
   const [error, setError] = useState("");
@@ -19,7 +21,7 @@ export default function LoginPage() {
       await api.login(username, password);
       router.replace("/");
     } catch {
-      setError("Invalid credentials");
+      setError(t("login.invalid"));
     } finally {
       setLoading(false);
     }
@@ -33,11 +35,11 @@ export default function LoginPage() {
             ◬
           </div>
           <h1 className="text-2xl font-semibold text-white">Sentinel</h1>
-          <p className="mt-1 text-sm text-slate-400">Autonomous Security Operations</p>
+          <p className="mt-1 text-sm text-slate-400">{t("login.subtitle")}</p>
         </div>
         <form onSubmit={submit} className="card space-y-4">
           <div>
-            <label className="mb-1 block text-xs text-slate-400">Username</label>
+            <label className="mb-1 block text-xs text-slate-400">{t("login.username")}</label>
             <input
               className="w-full rounded-xl border border-ink-600 bg-ink-950 px-3 py-2 text-sm outline-none focus:border-accent/60"
               value={username}
@@ -45,7 +47,7 @@ export default function LoginPage() {
             />
           </div>
           <div>
-            <label className="mb-1 block text-xs text-slate-400">Password</label>
+            <label className="mb-1 block text-xs text-slate-400">{t("login.password")}</label>
             <input
               type="password"
               className="w-full rounded-xl border border-ink-600 bg-ink-950 px-3 py-2 text-sm outline-none focus:border-accent/60"
@@ -55,9 +57,16 @@ export default function LoginPage() {
           </div>
           {error && <p className="text-sm text-risk-critical">{error}</p>}
           <button className="btn btn-accent w-full" disabled={loading}>
-            {loading ? "Signing in…" : "Sign in"}
+            {loading ? t("login.signingin") : t("login.signin")}
           </button>
-          <p className="text-center text-xs text-slate-500">Demo credentials: admin / admin</p>
+          <p className="text-center text-xs text-slate-500">{t("login.demo")}</p>
+          <button
+            type="button"
+            onClick={() => setLang(lang === "fa" ? "en" : "fa")}
+            className="mx-auto block text-xs text-slate-500 hover:text-accent-soft"
+          >
+            🌐 {t("lang.toggle")}
+          </button>
         </form>
       </div>
     </div>

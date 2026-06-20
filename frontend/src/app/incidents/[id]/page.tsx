@@ -5,8 +5,10 @@ import { useParams } from "next/navigation";
 import { useCallback, useEffect, useState } from "react";
 import { AiBadge, ApprovalPill, PageHeader, RiskPill, ScoreBar, SeverityPill, Spinner, StatusPill } from "@/components/ui";
 import { api, threatLabel } from "@/lib/api";
+import { detName, useLang } from "@/lib/i18n";
 
 export default function IncidentDetail() {
+  const { t, lang } = useLang();
   const { id } = useParams<{ id: string }>();
   const incidentId = Number(id);
   const [inc, setInc] = useState<any>(null);
@@ -47,33 +49,33 @@ export default function IncidentDetail() {
   const s = inc.scores;
   const summary = inc.ai_summary || {};
   const defaultTarget = inc.actor_username || inc.target_asset || "";
+  const title = detName(inc.det_id, lang, inc.title) + (lang === "fa" && inc.actor_username ? ` — ${inc.actor_username}` : "");
 
   return (
     <>
       <PageHeader
-        title={inc.title}
-        subtitle={`${inc.det_id} · ${threatLabel(inc.threat_type)} · detected ${new Date(inc.created_at).toLocaleString()}`}
+        title={title}
+        subtitle={`${inc.det_id} · ${detName(inc.det_id, lang, threatLabel(inc.threat_type))} · ${t("det.detected")} ${new Date(inc.created_at).toLocaleString()}`}
         right={
           <div className="flex items-center gap-2">
             <SeverityPill severity={inc.severity} />
             <ApprovalPill level={inc.human_approval_required} />
             <Link href="/incidents" className="btn">
-              ← Back
+              {t("det.back")}
             </Link>
           </div>
         }
       />
 
       <div className="grid gap-5 lg:grid-cols-3">
-        {/* Left: AI narrative + exec summary + timeline */}
         <div className="space-y-5 lg:col-span-2">
           <div className="card">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-medium text-slate-300">Analyst assessment</h2>
+              <h2 className="text-sm font-medium text-slate-300">{t("det.assessment")}</h2>
               <div className="flex items-center gap-2">
                 <AiBadge on={inc.ai_generated} />
                 <span className="pill bg-accent/15 text-accent-soft">
-                  {summary.likelihood_pct ?? Math.round(inc.confidence * 100)}% likely
+                  {summary.likelihood_pct ?? Math.round(inc.confidence * 100)}% {t("det.likely")}
                 </span>
               </div>
             </div>
@@ -81,41 +83,35 @@ export default function IncidentDetail() {
           </div>
 
           <div className="card">
-            <h2 className="mb-3 text-sm font-medium text-slate-300">Executive summary</h2>
+            <h2 className="mb-3 text-sm font-medium text-slate-300">{t("det.execSummary")}</h2>
             <div className="grid gap-3 sm:grid-cols-2">
-              <SummaryCell label="What happened" value={summary.what_happened} />
-              <SummaryCell label="Why it matters" value={summary.why_it_matters} />
-              <SummaryCell label="Supporting evidence" value={summary.evidence} />
-              <SummaryCell label="Potential damage" value={summary.potential_damage} />
-              <SummaryCell label="Recommended action" value={summary.recommended_action} accent />
-              <SummaryCell label="Human approval" value={summary.human_approval_required} />
+              <SummaryCell label={t("sum.what")} value={summary.what_happened} />
+              <SummaryCell label={t("sum.why")} value={summary.why_it_matters} />
+              <SummaryCell label={t("sum.evidence")} value={summary.evidence} />
+              <SummaryCell label={t("sum.damage")} value={summary.potential_damage} />
+              <SummaryCell label={t("sum.action")} value={summary.recommended_action} accent />
+              <SummaryCell label={t("sum.approval")} value={summary.human_approval_required} />
             </div>
           </div>
 
           <div className="card">
-            <h2 className="mb-3 text-sm font-medium text-slate-300">Evidence & matched factors</h2>
+            <h2 className="mb-3 text-sm font-medium text-slate-300">{t("det.evidenceFactors")}</h2>
             <div className="grid gap-4 sm:grid-cols-2">
               <div>
-                <div className="mb-2 text-[11px] uppercase tracking-wide text-slate-500">Required evidence</div>
+                <div className="mb-2 text-[11px] uppercase tracking-wide text-slate-500">{t("det.requiredEvidence")}</div>
                 <ul className="space-y-1 text-sm">
                   {(inc.evidence || []).map((e: any) => (
                     <li key={e.field} className="flex items-center justify-between gap-2">
                       <span className="font-mono text-xs text-slate-400">{e.field}</span>
                       <span className={e.observed ? "text-slate-200" : "text-slate-600"}>
-                        {e.observed ? (
-                          <span className="truncate" title={e.value}>{e.value}</span>
-                        ) : (
-                          "—"
-                        )}
+                        {e.observed ? <span className="truncate" title={e.value}>{e.value}</span> : "—"}
                       </span>
                     </li>
                   ))}
                 </ul>
               </div>
               <div>
-                <div className="mb-2 text-[11px] uppercase tracking-wide text-slate-500">
-                  Scoring factors (→ threat score)
-                </div>
+                <div className="mb-2 text-[11px] uppercase tracking-wide text-slate-500">{t("det.scoringFactors")}</div>
                 <ul className="space-y-1 text-sm">
                   {Object.entries(inc.matched_factors || {}).map(([k, v]: any) => (
                     <li key={k} className="flex items-center justify-between gap-2">
@@ -129,18 +125,18 @@ export default function IncidentDetail() {
           </div>
 
           <div className="card">
-            <h2 className="mb-3 text-sm font-medium text-slate-300">Attack timeline</h2>
-            <ol className="relative space-y-4 border-l border-ink-700 pl-5">
+            <h2 className="mb-3 text-sm font-medium text-slate-300">{t("det.timeline")}</h2>
+            <ol className="timeline-rail relative space-y-4 border-l border-ink-700 ps-5">
               {inc.timeline.map((e: any, idx: number) => (
                 <li key={idx} className="relative">
-                  <span className="absolute -left-[1.46rem] top-1 h-2.5 w-2.5 rounded-full bg-accent" />
+                  <span className="timeline-dot absolute -left-[1.46rem] top-1 h-2.5 w-2.5 rounded-full bg-accent" />
                   <div className="text-xs text-slate-500">{new Date(e.time).toLocaleString()}</div>
                   <div className="text-sm text-slate-200">
                     <span className="font-medium text-white">{threatLabel(e.action)}</span>{" "}
-                    via <span className="font-mono text-accent-soft">{e.source}</span>
+                    {t("common.via")} <span className="font-mono text-accent-soft">{e.source}</span>
                   </div>
                   <div className="text-xs text-slate-400">
-                    {e.actor && <>actor {e.actor} </>}
+                    {e.actor && <>{t("common.actor")} {e.actor} </>}
                     {e.location && <>· {e.location} </>}
                     {e.asset && <>· {e.asset}</>}
                   </div>
@@ -150,45 +146,42 @@ export default function IncidentDetail() {
           </div>
         </div>
 
-        {/* Right: scores + response */}
         <div className="space-y-5">
           <div className="card">
             <div className="mb-3 flex items-center justify-between">
-              <h2 className="text-sm font-medium text-slate-300">Risk scores</h2>
+              <h2 className="text-sm font-medium text-slate-300">{t("det.riskScores")}</h2>
               <RiskPill score={s.final_score} />
             </div>
             <div className="space-y-3">
-              <ScoreBar label="Threat severity" value={s.threat_score} />
-              <ScoreBar label="User risk" value={s.user_risk} />
-              <ScoreBar label="Asset risk" value={s.asset_risk} />
-              <ScoreBar label="Business impact" value={s.business_impact} />
+              <ScoreBar label={t("score.threat")} value={s.threat_score} />
+              <ScoreBar label={t("score.user")} value={s.user_risk} />
+              <ScoreBar label={t("score.asset")} value={s.asset_risk} />
+              <ScoreBar label={t("score.business")} value={s.business_impact} />
               <div className="mt-2 border-t border-ink-700 pt-3">
-                <ScoreBar label="FINAL SCORE" value={s.final_score} />
+                <ScoreBar label={t("score.final")} value={s.final_score} />
               </div>
             </div>
           </div>
 
           <div className="card">
-            <h2 className="mb-3 text-sm font-medium text-slate-300">Response (needs approval)</h2>
+            <h2 className="mb-3 text-sm font-medium text-slate-300">{t("det.response")}</h2>
             <div className="grid grid-cols-2 gap-2">
               {actions.map((a) => (
                 <button
                   key={a.type}
                   className="btn"
-                  onClick={() => setConfirm({ type: a.type, label: a.label, target: defaultTarget })}
+                  onClick={() => setConfirm({ type: a.type, label: t(`action.${a.type}`), target: defaultTarget })}
                 >
-                  {a.label}
+                  {t(`action.${a.type}`)}
                 </button>
               ))}
             </div>
             {inc.actions?.length > 0 && (
               <div className="mt-4 space-y-1.5 border-t border-ink-700 pt-3 text-xs">
-                <div className="text-slate-500">Audit trail</div>
+                <div className="text-slate-500">{t("det.audit")}</div>
                 {inc.actions.map((a: any) => (
                   <div key={a.id} className="flex items-center justify-between">
-                    <span className="text-slate-300">
-                      {threatLabel(a.action_type)} → {a.target}
-                    </span>
+                    <span className="text-slate-300">{t(`action.${a.action_type}`)} → {a.target}</span>
                     <StatusPill status={a.status} />
                   </div>
                 ))}
@@ -197,14 +190,14 @@ export default function IncidentDetail() {
           </div>
 
           <div className="card">
-            <h2 className="mb-3 text-sm font-medium text-slate-300">Triage</h2>
+            <h2 className="mb-3 text-sm font-medium text-slate-300">{t("det.triage")}</h2>
             <div className="flex flex-wrap gap-2">
-              <button className="btn" onClick={() => setStatus("investigating")}>Investigating</button>
-              <button className="btn btn-accent" onClick={() => setStatus("resolved")}>Resolve</button>
-              <button className="btn" onClick={() => setStatus("dismissed")}>Dismiss</button>
+              <button className="btn" onClick={() => setStatus("investigating")}>{t("triage.investigating")}</button>
+              <button className="btn btn-accent" onClick={() => setStatus("resolved")}>{t("triage.resolve")}</button>
+              <button className="btn" onClick={() => setStatus("dismissed")}>{t("triage.dismiss")}</button>
             </div>
-            <div className="mt-3 text-xs text-slate-500">
-              Current status: <StatusPill status={inc.status} />
+            <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
+              {t("det.currentStatus")} <StatusPill status={inc.status} />
             </div>
           </div>
         </div>
@@ -213,20 +206,18 @@ export default function IncidentDetail() {
       {confirm && (
         <div className="fixed inset-0 z-50 grid place-items-center bg-black/60 p-4" onClick={() => setConfirm(null)}>
           <div className="card w-full max-w-md" onClick={(e) => e.stopPropagation()}>
-            <h3 className="text-lg font-semibold text-white">Confirm: {confirm.label}</h3>
-            <p className="mt-2 text-sm text-slate-400">
-              This response action requires manager approval before it is executed.
-            </p>
-            <label className="mt-4 block text-xs text-slate-400">Target</label>
+            <h3 className="text-lg font-semibold text-white">{t("det.confirm")} {confirm.label}</h3>
+            <p className="mt-2 text-sm text-slate-400">{t("det.confirmBody")}</p>
+            <label className="mt-4 block text-xs text-slate-400">{t("det.targetField")}</label>
             <input
               className="mt-1 w-full rounded-xl border border-ink-600 bg-ink-950 px-3 py-2 text-sm outline-none focus:border-accent/60"
               value={confirm.target}
               onChange={(e) => setConfirm({ ...confirm, target: e.target.value })}
             />
             <div className="mt-5 flex justify-end gap-2">
-              <button className="btn" onClick={() => setConfirm(null)}>Cancel</button>
+              <button className="btn" onClick={() => setConfirm(null)}>{t("det.cancel")}</button>
               <button className="btn btn-danger" onClick={runAction} disabled={busy || !confirm.target}>
-                {busy ? "Executing…" : "Approve & execute"}
+                {busy ? t("det.executing") : t("det.approveExecute")}
               </button>
             </div>
           </div>

@@ -41,3 +41,30 @@ body {
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-thumb { @apply rounded-full bg-ink-700; }
+
+/* --- RTL / Persian support --------------------------------------------- */
+[dir="rtl"] body,
+[dir="rtl"] input,
+[dir="rtl"] button,
+[dir="rtl"] textarea {
+  font-family: "Vazirmatn", "Segoe UI", "Tahoma", "Arial", sans-serif;
+}
+
+/* letter-spacing breaks Persian glyph joining — neutralize it in RTL. */
+[dir="rtl"] [class*="tracking-"] {
+  letter-spacing: 0 !important;
+}
+
+/* The sidebar border + timeline rail use physical sides; flip them in RTL. */
+[dir="rtl"] aside.border-r {
+  border-right: 0;
+  @apply border-l border-ink-800;
+}
+[dir="rtl"] .timeline-rail {
+  border-left: 0;
+  @apply border-r border-ink-700;
+}
+[dir="rtl"] .timeline-dot {
+  left: auto;
+  right: -1.46rem;
+}
