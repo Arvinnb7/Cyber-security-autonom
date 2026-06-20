@@ -11,7 +11,9 @@ import random
 from sqlmodel import Session
 
 from app.connectors.base import RawEvent
+from app.connectors.real.factory import poll_enabled_connections
 from app.connectors.simulators import get_connectors
+from app.core.config import settings
 from app.detection.correlation import correlate_and_score
 from app.detection.detectors import run_detectors
 from app.ingestion.dedup import is_duplicate
@@ -35,12 +37,23 @@ def ingest_raw_events(session: Session, raw_events: list[RawEvent]) -> int:
 
 
 def ingest_cycle(session: Session, inject_scenario_prob: float = 0.25) -> int:
-    """One poll of all connectors (benign noise) with a chance of an attack chain."""
+    """One poll of connectors with a chance of an attack chain.
+
+    Pulls live events from any enabled org integrations (real connectors) and,
+    when simulation is enabled, also generates benign noise + occasional attacks.
+    """
     raw: list[RawEvent] = []
-    for connector in get_connectors():
-        raw.extend(connector.fetch_events())
-    if random.random() < inject_scenario_prob:
-        raw.extend(random_scenario())
+
+    # Live org integrations (real vendor APIs) — the production data path.
+    raw.extend(poll_enabled_connections(session))
+
+    # Simulated sources (demo / when no real connection is configured).
+    if settings.sim_enabled:
+        for connector in get_connectors():
+            raw.extend(connector.fetch_events())
+        if random.random() < inject_scenario_prob:
+            raw.extend(random_scenario())
+
     return ingest_raw_events(session, raw)
 
 

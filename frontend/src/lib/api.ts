@@ -72,6 +72,14 @@ export const api = {
     }),
   detections: () => request<any[]>("/detections"),
   detection: (detId: string) => request<any>(`/detections/${detId}`),
+  providers: () => request<any[]>("/providers"),
+  connections: () => request<any[]>("/connections"),
+  createConnection: (provider: string, display_name: string, credentials: Record<string, string>, enabled = true) =>
+    request<any>("/connections", { method: "POST", body: JSON.stringify({ provider, display_name, credentials, enabled }) }),
+  updateConnection: (id: number, body: any) =>
+    request<any>(`/connections/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  testConnection: (id: number) => request<any>(`/connections/${id}/test`, { method: "POST" }),
+  deleteConnection: (id: number) => request<any>(`/connections/${id}`, { method: "DELETE" }),
   reports: () => request<any[]>("/reports"),
   report: (id: number) => request<any>(`/reports/${id}`),
   generateReport: () => request<any>("/reports/generate", { method: "POST" }),

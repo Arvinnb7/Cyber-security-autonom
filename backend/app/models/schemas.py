@@ -33,3 +33,16 @@ class StatusUpdate(BaseModel):
 
 class InjectRequest(BaseModel):
     scenario: str | None = None  # None => random
+
+
+class ConnectionCreate(BaseModel):
+    provider: str
+    display_name: str = ""
+    enabled: bool = True
+    credentials: dict[str, Any] = {}
+
+
+class ConnectionUpdate(BaseModel):
+    display_name: str | None = None
+    enabled: bool | None = None
+    credentials: dict[str, Any] | None = None

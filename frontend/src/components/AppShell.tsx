@@ -11,6 +11,7 @@ const NAV = [
   { href: "/incidents", key: "nav.incidents", icon: "◆" },
   { href: "/detections", key: "nav.detections", icon: "◈" },
   { href: "/users", key: "nav.users", icon: "◉" },
+  { href: "/integrations", key: "nav.integrations", icon: "⚯" },
   { href: "/chat", key: "nav.chat", icon: "✦" },
   { href: "/reports", key: "nav.reports", icon: "▥" },
 ];

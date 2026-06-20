@@ -113,6 +113,24 @@ Without a key everything still works via rule-based fallbacks — look for the
 
 ---
 
+## Connecting your real security sources (live integrations)
+
+Open **Integrations** in the app to connect your organization's actual API:
+
+1. Click **Add connection**, pick a provider (e.g. *Microsoft 365 / Azure AD*).
+2. Enter the API credentials (for M365: Tenant ID, Client ID, Client Secret from
+   an Azure AD app registration with `AuditLog.Read.All` application permission).
+3. **Test** the connection — it authenticates against the real vendor API.
+4. Once enabled, the pipeline pulls live events every cycle and the detection
+   engine runs on your real data.
+
+Credentials are encrypted at rest (Fernet) and never returned by the API — reads
+only show which secret fields are set. **Microsoft 365 / Azure AD** ships a real,
+live connector today (Microsoft Graph sign-in + directory audit logs); the other
+providers are configurable and their connectors are drop-in (`backend/app/connectors/real/`).
+
+To run purely on real data, disable simulation with `SENTINEL_SIM_ENABLED=false`.
+
 ## Plugging in your own attack models
 
 Drop JSON attack-model definitions into [`data/attack_models/`](data/attack_models/README.md).

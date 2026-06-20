@@ -42,6 +42,26 @@ class DetectionDefinition(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
+class Connection(SQLModel, table=True):
+    """An organization's live integration with a security source (F1).
+
+    ``config`` holds non-secret settings (safe to return); secret credentials are
+    encrypted in ``secrets_enc`` and never returned by the API.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    provider: str = Field(index=True)                 # e.g. "microsoft_365"
+    display_name: str = ""
+    enabled: bool = True
+    config: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    secrets_enc: str = ""                              # Fernet-encrypted JSON of secret fields
+    status: str = "unknown"                            # unknown | connected | error
+    last_error: str = ""
+    last_sync: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 class User(SQLModel, table=True):
     """A monitored identity in the protected organization."""
 

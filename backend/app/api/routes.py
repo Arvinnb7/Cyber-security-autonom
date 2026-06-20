@@ -9,14 +9,19 @@ from sqlmodel import Session, select
 
 from app.ai.chat import answer_question
 from app.ai.client import ai_available
+from app.connectors.real.factory import test_connection
+from app.connectors.registry import provider_meta, public_providers, secret_keys, split_credentials
 from app.connectors.simulators import get_connectors
 from app.core.auth import authenticate, create_access_token, get_current_user
+from app.core.crypto import decrypt_dict, encrypt_dict
 from app.core.db import get_session
 from app.core.time import utcnow
 from app.models.schemas import (
     ActionRequest,
     ChatRequest,
     ChatResponse,
+    ConnectionCreate,
+    ConnectionUpdate,
     InjectRequest,
     StatusUpdate,
     Token,
@@ -24,6 +29,7 @@ from app.models.schemas import (
 from app.models.tables import (
     Asset,
     AuditAction,
+    Connection,
     DetectionDefinition,
     Incident,
     Signal,
@@ -263,6 +269,85 @@ def delete_detection(det_id: str, _: str = Auth, session: Session = DB) -> dict:
     return {"ok": True, "deleted": det_id}
 
 
+# --- Integrations / live connections (F1) ---------------------------------
+
+@api_router.get("/providers")
+def list_providers(_: str = Auth) -> list[dict]:
+    return public_providers()
+
+
+@api_router.get("/connections")
+def list_connections(_: str = Auth, session: Session = DB) -> list[dict]:
+    rows = session.exec(select(Connection).order_by(Connection.created_at.desc())).all()
+    return [_connection_brief(c) for c in rows]
+
+
+@api_router.post("/connections")
+def create_connection(body: ConnectionCreate, _: str = Auth, session: Session = DB) -> dict:
+    if provider_meta(body.provider) is None:
+        raise HTTPException(status_code=400, detail=f"unknown provider: {body.provider}")
+    public, secrets = split_credentials(body.provider, body.credentials or {})
+    conn = Connection(
+        provider=body.provider,
+        display_name=body.display_name or body.provider,
+        enabled=body.enabled,
+        config=public,
+        secrets_enc=encrypt_dict(secrets),
+    )
+    session.add(conn)
+    session.commit()
+    session.refresh(conn)
+    return _connection_brief(conn)
+
+
+@api_router.put("/connections/{conn_id}")
+def update_connection(conn_id: int, body: ConnectionUpdate, _: str = Auth, session: Session = DB) -> dict:
+    conn = session.get(Connection, conn_id)
+    if conn is None:
+        raise HTTPException(status_code=404, detail="connection not found")
+    if body.display_name is not None:
+        conn.display_name = body.display_name
+    if body.enabled is not None:
+        conn.enabled = body.enabled
+    if body.credentials:
+        public, secrets = split_credentials(conn.provider, body.credentials)
+        conn.config = {**conn.config, **public}
+        if secrets:  # only overwrite secrets that were actually provided
+            current = decrypt_dict(conn.secrets_enc)
+            current.update(secrets)
+            conn.secrets_enc = encrypt_dict(current)
+    conn.updated_at = utcnow()
+    session.add(conn)
+    session.commit()
+    session.refresh(conn)
+    return _connection_brief(conn)
+
+
+@api_router.post("/connections/{conn_id}/test")
+def test_conn(conn_id: int, _: str = Auth, session: Session = DB) -> dict:
+    conn = session.get(Connection, conn_id)
+    if conn is None:
+        raise HTTPException(status_code=404, detail="connection not found")
+    ok, message = test_connection(conn)
+    conn.status = "connected" if ok else "error"
+    conn.last_error = "" if ok else message
+    if ok:
+        conn.last_sync = utcnow()
+    session.add(conn)
+    session.commit()
+    return {"ok": ok, "message": message, "status": conn.status}
+
+
+@api_router.delete("/connections/{conn_id}")
+def delete_connection(conn_id: int, _: str = Auth, session: Session = DB) -> dict:
+    conn = session.get(Connection, conn_id)
+    if conn is None:
+        raise HTTPException(status_code=404, detail="connection not found")
+    session.delete(conn)
+    session.commit()
+    return {"ok": True, "deleted": conn_id}
+
+
 # --- Demo control ---------------------------------------------------------
 
 @api_router.post("/control/inject")
@@ -321,3 +406,15 @@ def _asset_brief(a: Asset) -> dict:
     return {"id": a.id, "name": a.name, "asset_type": a.asset_type,
             "sensitivity": a.sensitivity, "owner_department": a.owner_department,
             "risk_score": a.risk_score}
+
+
+def _connection_brief(c: Connection) -> dict:
+    # Never return raw secrets — only which secret fields are set.
+    set_secrets = sorted(decrypt_dict(c.secrets_enc).keys())
+    return {
+        "id": c.id, "provider": c.provider, "display_name": c.display_name,
+        "enabled": c.enabled, "status": c.status, "last_error": c.last_error,
+        "last_sync": c.last_sync, "config": c.config,
+        "secrets_set": set_secrets,
+        "required_secrets": sorted(secret_keys(c.provider)),
+    }
