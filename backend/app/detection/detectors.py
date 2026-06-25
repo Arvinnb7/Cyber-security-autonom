@@ -12,6 +12,7 @@ from datetime import timedelta
 
 from sqlmodel import Session, select
 
+from app.core import runtime
 from app.core.time import utcnow
 from app.detection.catalog import get_definition
 from app.models.tables import Event, Signal
@@ -37,7 +38,11 @@ def _haversine_km(c1: str, c2: str) -> float:
 
 def _recent_events(session: Session) -> list[Event]:
     cutoff = utcnow() - timedelta(minutes=WINDOW_MINUTES)
-    return list(session.exec(select(Event).where(Event.timestamp >= cutoff).order_by(Event.timestamp)))
+    return list(session.exec(
+        select(Event)
+        .where(Event.timestamp >= cutoff, Event.origin == runtime.current_mode())
+        .order_by(Event.timestamp)
+    ))
 
 
 def _by_user(events: list[Event]) -> dict[str, list[Event]]:
@@ -441,12 +446,14 @@ def run_detectors(session: Session) -> list[Signal]:
         Signal.created_at >= utcnow() - timedelta(minutes=WINDOW_MINUTES * 2)
     ))
     seen = {_signal_fingerprint(s) for s in existing}
+    mode = runtime.current_mode()
     fresh: list[Signal] = []
     for s in candidates:
         fp = _signal_fingerprint(s)
         if fp in seen:
             continue
         seen.add(fp)
+        s.origin = mode
         session.add(s)
         fresh.append(s)
     session.commit()

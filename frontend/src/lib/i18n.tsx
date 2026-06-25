@@ -60,6 +60,11 @@ const DICT: Record<string, { en: string; fa: string }> = {
   "int.statusUnknown": { en: "not tested", fa: "تست‌نشده" },
   "nav.signout": { en: "Sign out", fa: "خروج" },
   "lang.toggle": { en: "فارسی", fa: "English" },
+  "mode.demo": { en: "Demo data", fa: "داده‌ی دمو" },
+  "mode.live": { en: "Live data", fa: "داده‌ی واقعی" },
+  "mode.switching": { en: "Switching…", fa: "در حال تغییر…" },
+  "mode.toLive": { en: "Switch to Live", fa: "تغییر به واقعی" },
+  "mode.toDemo": { en: "Switch to Demo", fa: "تغییر به دمو" },
 
   // login
   "login.subtitle": { en: "Autonomous Security Operations", fa: "عملیات امنیتی خودمختار" },

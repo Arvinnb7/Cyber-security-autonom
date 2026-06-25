@@ -7,6 +7,7 @@ from datetime import timedelta
 from sqlmodel import Session, select
 
 from app.ai.client import complete
+from app.core import runtime
 from app.core.time import utcnow
 from app.models.tables import AuditAction, Incident, WeeklyReport
 
@@ -17,8 +18,10 @@ _SYSTEM = (
 
 
 def _collect_stats(session: Session, start: datetime, end: datetime) -> dict:
+    mode = runtime.current_mode()
     incidents = list(session.exec(
-        select(Incident).where(Incident.created_at >= start, Incident.created_at <= end)
+        select(Incident).where(Incident.created_at >= start, Incident.created_at <= end,
+                               Incident.origin == mode)
     ))
     resolved = [i for i in incidents if i.status in ("resolved", "dismissed")]
     needs_action = sorted(
@@ -26,7 +29,8 @@ def _collect_stats(session: Session, start: datetime, end: datetime) -> dict:
         key=lambda i: i.final_score, reverse=True,
     )
     actions = list(session.exec(
-        select(AuditAction).where(AuditAction.requested_at >= start, AuditAction.requested_at <= end)
+        select(AuditAction).where(AuditAction.requested_at >= start, AuditAction.requested_at <= end,
+                                  AuditAction.origin == mode)
     ))
     by_type = Counter(i.threat_type for i in incidents)
     return {
@@ -78,7 +82,7 @@ def generate_weekly_report(session: Session, days: int = 7) -> WeeklyReport:
 
     report = WeeklyReport(
         period_start=start, period_end=end, content_md=content,
-        stats=stats, ai_generated=bool(ai_text),
+        stats=stats, ai_generated=bool(ai_text), origin=runtime.current_mode(),
     )
     session.add(report)
     session.commit()

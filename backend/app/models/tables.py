@@ -22,6 +22,14 @@ def utcnow() -> datetime:
     return datetime.now(timezone.utc).replace(tzinfo=None)
 
 
+class AppState(SQLModel, table=True):
+    """Single-row runtime application state (e.g. the active data mode)."""
+
+    id: Optional[int] = Field(default=1, primary_key=True)
+    data_mode: str = "demo"                            # "demo" | "live"
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 class DetectionDefinition(SQLModel, table=True):
     """A detection from the MVP catalog (source of truth, DET-001..DET-010)."""
 
@@ -76,6 +84,7 @@ class User(SQLModel, table=True):
     is_privileged: bool = False
     risk_score: float = 0.0          # rolling user risk (F4), 0..100
     is_blocked: bool = False
+    origin: str = Field(default="demo", index=True)   # data mode this row belongs to
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -89,6 +98,7 @@ class Asset(SQLModel, table=True):
     sensitivity: int = 3
     owner_department: str = "General"
     risk_score: float = 0.0
+    origin: str = Field(default="demo", index=True)   # data mode this row belongs to
     created_at: datetime = Field(default_factory=utcnow)
 
 
@@ -107,6 +117,7 @@ class Event(SQLModel, table=True):
     target_asset: Optional[str] = None
     severity: int = 1                            # 1..5 base severity from the source
     fingerprint: str = Field(default="", index=True)  # dedup key (F2)
+    origin: str = Field(default="demo", index=True)   # data mode this row belongs to
     raw: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
 
 
@@ -125,6 +136,7 @@ class Signal(SQLModel, table=True):
     # Which catalog scoring_factors fired and their points (drives threat_score).
     matched_factors: dict[str, int] = Field(default_factory=dict, sa_column=Column(JSON))
     event_ids: list[int] = Field(default_factory=list, sa_column=Column(JSON))
+    origin: str = Field(default="demo", index=True)   # data mode this row belongs to
     created_at: datetime = Field(default_factory=utcnow, index=True)
     incident_id: Optional[int] = Field(default=None, foreign_key="incident.id", index=True)
 
@@ -139,6 +151,7 @@ class Incident(SQLModel, table=True):
     severity: str = Field(default="medium", index=True)  # low|medium|high|critical (from final_score)
     human_approval_required: str = "high"             # from catalog
     status: str = Field(default="open", index=True)   # open | investigating | resolved | dismissed
+    origin: str = Field(default="demo", index=True)   # data mode this row belongs to
     actor_username: Optional[str] = Field(default=None, index=True)
     target_asset: Optional[str] = None
     confidence: float = 0.5                       # overall likelihood 0..1
@@ -175,6 +188,7 @@ class AuditAction(SQLModel, table=True):
     requested_by: str = "system"
     approved_by: Optional[str] = None
     result: str = ""
+    origin: str = Field(default="demo", index=True)   # data mode this row belongs to
     requested_at: datetime = Field(default_factory=utcnow, index=True)
     resolved_at: Optional[datetime] = None
 
@@ -188,4 +202,5 @@ class WeeklyReport(SQLModel, table=True):
     content_md: str = ""                          # rendered markdown
     stats: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     ai_generated: bool = False
+    origin: str = Field(default="demo", index=True)   # data mode this row belongs to
     generated_at: datetime = Field(default_factory=utcnow, index=True)

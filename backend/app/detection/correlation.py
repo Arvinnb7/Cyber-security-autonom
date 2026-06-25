@@ -7,6 +7,7 @@ from datetime import timedelta
 from sqlmodel import Session, select
 
 from app.ai.analysis import enrich_incident
+from app.core import runtime
 from app.core.time import utcnow
 from app.detection.catalog import get_definition, severity_for_score
 from app.models.tables import Event, Incident, Signal
@@ -76,6 +77,7 @@ def _find_open_incident(session: Session, det_id: str, username: str | None) -> 
         select(Incident).where(
             Incident.det_id == det_id,
             Incident.actor_username == username,
+            Incident.origin == runtime.current_mode(),
             Incident.status.in_(["open", "investigating"]),
             Incident.created_at >= cutoff,
         ).order_by(Incident.created_at.desc())
@@ -95,7 +97,8 @@ def correlate_and_score(session: Session, fresh_signals: list[Signal]) -> list[I
         created = incident is None
         if incident is None:
             incident = Incident(det_id=det_id, threat_type=sigs[0].threat_type,
-                                actor_username=username, target_asset=asset_name, status="open")
+                                actor_username=username, target_asset=asset_name, status="open",
+                                origin=runtime.current_mode())
             session.add(incident)
             session.commit()
             session.refresh(incident)

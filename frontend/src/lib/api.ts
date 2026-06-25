@@ -86,6 +86,9 @@ export const api = {
   injectScenario: (scenario?: string) =>
     request<any>("/control/inject", { method: "POST", body: JSON.stringify({ scenario }) }),
   meta: () => request<any>("/connectors"),
+  getMode: () => request<{ data_mode: string }>("/mode"),
+  setMode: (data_mode: string) =>
+    request<{ data_mode: string }>("/mode", { method: "POST", body: JSON.stringify({ data_mode }) }),
 };
 
 export function riskColor(score: number): string {

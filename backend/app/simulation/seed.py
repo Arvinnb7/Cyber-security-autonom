@@ -15,12 +15,12 @@ logger = logging.getLogger("sentinel.seed")
 
 
 def seed_org(session: Session) -> None:
-    if session.exec(select(User)).first() is None:
+    if session.exec(select(User).where(User.origin == "demo")).first() is None:
         for u in DEMO_USERS:
-            session.add(User(**u))
-    if session.exec(select(Asset)).first() is None:
+            session.add(User(origin="demo", **u))
+    if session.exec(select(Asset).where(Asset.origin == "demo")).first() is None:
         for a in DEMO_ASSETS:
-            session.add(Asset(**a))
+            session.add(Asset(origin="demo", **a))
     session.commit()
 
 
@@ -42,5 +42,5 @@ def seed_all(session: Session, demo: bool = True) -> None:
     # Demo organization + attack scenarios are mock data — demo mode only.
     if demo:
         seed_org(session)
-        if session.exec(select(Incident)).first() is None:
+        if session.exec(select(Incident).where(Incident.origin == "demo")).first() is None:
             seed_scenarios(session)

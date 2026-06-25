@@ -12,8 +12,8 @@ from app.ai.client import ai_available
 from app.connectors.real.factory import test_connection
 from app.connectors.registry import provider_meta, public_providers, secret_keys, split_credentials
 from app.connectors.simulators import get_connectors
+from app.core import runtime
 from app.core.auth import authenticate, create_access_token, get_current_user
-from app.core.config import settings
 from app.core.crypto import decrypt_dict, encrypt_dict
 from app.core.db import get_session
 from app.core.time import utcnow
@@ -24,6 +24,7 @@ from app.models.schemas import (
     ConnectionCreate,
     ConnectionUpdate,
     InjectRequest,
+    ModeUpdate,
     StatusUpdate,
     Token,
 )
@@ -51,19 +52,40 @@ DB = Depends(get_session)
 
 @api_router.get("/health")
 def health() -> dict:
-    return {"status": "ok", "ai_enabled": ai_available(), "data_mode": settings.data_mode}
+    return {"status": "ok", "ai_enabled": ai_available(), "data_mode": runtime.current_mode()}
 
 
 @api_router.get("/connectors")
 def connectors(_: str = Auth) -> dict:
     return {
         "ai_enabled": ai_available(),
-        "data_mode": settings.data_mode,
+        "data_mode": runtime.current_mode(),
         "connectors": [
             {"name": c.name, "label": c.label, "actions": list(c.supported_actions)}
             for c in get_connectors()
         ],
     }
+
+
+# --- Data mode (switch demo <-> live live, in-app) ------------------------
+
+@api_router.get("/mode")
+def get_mode(_: str = Auth) -> dict:
+    return {"data_mode": runtime.current_mode()}
+
+
+@api_router.post("/mode")
+def set_mode(body: ModeUpdate, _: str = Auth, session: Session = DB) -> dict:
+    try:
+        mode = runtime.set_mode(session, body.data_mode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    # Entering demo mode: ensure the demo dataset exists so the UI is populated.
+    if mode == "demo":
+        from app.simulation.seed import seed_all
+
+        seed_all(session, demo=True)
+    return {"data_mode": mode}
 
 
 # --- Auth -----------------------------------------------------------------
@@ -102,7 +124,7 @@ def list_incidents(status: str | None = None, limit: int = 50,
 @api_router.get("/incidents/{incident_id}")
 def get_incident(incident_id: int, _: str = Auth, session: Session = DB) -> dict:
     incident = session.get(Incident, incident_id)
-    if incident is None:
+    if incident is None or incident.origin != runtime.current_mode():
         raise HTTPException(status_code=404, detail="incident not found")
     signals = list(session.exec(select(Signal).where(Signal.incident_id == incident_id)))
     actions = list(session.exec(select(AuditAction).where(AuditAction.incident_id == incident_id)))
@@ -196,7 +218,10 @@ def chat(body: ChatRequest, _: str = Auth, session: Session = DB) -> ChatRespons
 
 @api_router.get("/reports")
 def list_reports(_: str = Auth, session: Session = DB) -> list[dict]:
-    reports = session.exec(select(WeeklyReport).order_by(WeeklyReport.generated_at.desc())).all()
+    reports = session.exec(
+        select(WeeklyReport).where(WeeklyReport.origin == runtime.current_mode())
+        .order_by(WeeklyReport.generated_at.desc())
+    ).all()
     return [{"id": r.id, "period_start": r.period_start, "period_end": r.period_end,
              "generated_at": r.generated_at, "ai_generated": r.ai_generated, "stats": r.stats}
             for r in reports]
@@ -357,7 +382,7 @@ def inject_scenario(body: InjectRequest, _: str = Auth, session: Session = DB) -
     from app.ingestion.pipeline import analyze, ingest_raw_events
     from app.simulation.scenarios import SCENARIOS, generate_scenario, random_scenario
 
-    if settings.is_live:
+    if runtime.is_live():
         raise HTTPException(status_code=403, detail="demo scenario injection is disabled in live mode")
     if body.scenario and body.scenario not in SCENARIOS:
         raise HTTPException(status_code=400, detail=f"unknown scenario; choose from {list(SCENARIOS)}")
@@ -371,7 +396,7 @@ def inject_scenario(body: InjectRequest, _: str = Auth, session: Session = DB) -
 def run_cycle(_: str = Auth, session: Session = DB) -> dict:
     from app.ingestion.pipeline import run_full_cycle
 
-    if settings.is_live:
+    if runtime.is_live():
         raise HTTPException(status_code=403, detail="forced demo cycle is disabled in live mode")
     return run_full_cycle(session, inject_scenario_prob=1.0)
 

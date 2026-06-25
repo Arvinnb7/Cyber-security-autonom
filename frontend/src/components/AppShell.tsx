@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-import { clearToken, getToken } from "@/lib/api";
+import { api, clearToken, getToken } from "@/lib/api";
 import { useLang } from "@/lib/i18n";
 
 const NAV = [
@@ -21,6 +21,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
   const router = useRouter();
   const { t, lang, setLang } = useLang();
   const [ready, setReady] = useState(false);
+  const [mode, setMode] = useState<string | null>(null);
+  const [switching, setSwitching] = useState(false);
   const isLogin = pathname === "/login";
 
   useEffect(() => {
@@ -29,7 +31,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       return;
     }
     setReady(true);
+    if (!isLogin) api.getMode().then((m) => setMode(m.data_mode)).catch(() => {});
   }, [isLogin, pathname, router]);
+
+  async function toggleMode() {
+    if (!mode || switching) return;
+    setSwitching(true);
+    try {
+      await api.setMode(mode === "demo" ? "live" : "demo");
+      // Full reload so every page refetches the now-active dataset.
+      window.location.reload();
+    } catch {
+      setSwitching(false);
+    }
+  }
 
   if (isLogin) return <>{children}</>;
   if (!ready) return null;
@@ -57,6 +72,20 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             );
           })}
         </nav>
+        {mode && (
+          <div className="mt-2 rounded-xl border border-ink-700/60 bg-ink-850/60 p-2.5">
+            <div className="mb-1.5 flex items-center gap-2 px-1 text-xs">
+              <span
+                className="h-1.5 w-1.5 rounded-full"
+                style={{ background: mode === "live" ? "#34d399" : "#fb923c" }}
+              />
+              <span className="text-slate-300">{mode === "live" ? t("mode.live") : t("mode.demo")}</span>
+            </div>
+            <button className="btn w-full py-1.5 text-xs" onClick={toggleMode} disabled={switching}>
+              {switching ? t("mode.switching") : mode === "demo" ? t("mode.toLive") : t("mode.toDemo")}
+            </button>
+          </div>
+        )}
         <button
           className="nav-link mt-2"
           onClick={() => setLang(lang === "fa" ? "en" : "fa")}

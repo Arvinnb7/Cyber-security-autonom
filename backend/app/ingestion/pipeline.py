@@ -13,6 +13,7 @@ from sqlmodel import Session
 from app.connectors.base import RawEvent
 from app.connectors.real.factory import poll_enabled_connections
 from app.connectors.simulators import get_connectors
+from app.core import runtime
 from app.core.config import settings
 from app.detection.correlation import correlate_and_score
 from app.detection.detectors import run_detectors
@@ -24,10 +25,12 @@ logger = logging.getLogger("sentinel.pipeline")
 
 
 def ingest_raw_events(session: Session, raw_events: list[RawEvent]) -> int:
-    """Normalize, de-duplicate and persist a batch of raw events."""
+    """Normalize, de-duplicate and persist a batch of raw events (stamped with mode)."""
+    mode = runtime.current_mode()
     inserted = 0
     for raw in raw_events:
         event = normalize(raw)
+        event.origin = mode
         if is_duplicate(session, event.fingerprint):
             continue
         session.add(event)
@@ -37,19 +40,16 @@ def ingest_raw_events(session: Session, raw_events: list[RawEvent]) -> int:
 
 
 def ingest_cycle(session: Session, inject_scenario_prob: float = 0.25) -> int:
-    """One poll of connectors with a chance of an attack chain.
+    """One poll of connectors for the *current* data mode.
 
-    Pulls live events from any enabled org integrations (real connectors) and,
-    when simulation is enabled, also generates benign noise + occasional attacks.
+    In live mode the DB is fed exclusively by real org integrations; in demo mode
+    by the simulators. Each mode's data is tagged so switching never mixes them.
     """
     raw: list[RawEvent] = []
 
-    # Live org integrations (real vendor APIs) — the production data path.
-    raw.extend(poll_enabled_connections(session))
-
-    # Simulated sources — demo mode only. In live mode the DB is fed exclusively
-    # by real connectors above.
-    if settings.is_demo and settings.sim_enabled:
+    if runtime.is_live():
+        raw.extend(poll_enabled_connections(session))
+    elif settings.sim_enabled:  # demo
         for connector in get_connectors():
             raw.extend(connector.fetch_events())
         if random.random() < inject_scenario_prob:

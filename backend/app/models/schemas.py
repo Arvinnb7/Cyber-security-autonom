@@ -35,6 +35,10 @@ class InjectRequest(BaseModel):
     scenario: str | None = None  # None => random
 
 
+class ModeUpdate(BaseModel):
+    data_mode: str  # "demo" | "live"
+
+
 class ConnectionCreate(BaseModel):
     provider: str
     display_name: str = ""

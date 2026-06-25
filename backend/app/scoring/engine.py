@@ -18,6 +18,7 @@ from dataclasses import dataclass
 
 from sqlmodel import Session, select
 
+from app.core import runtime
 from app.core.config import settings
 from app.detection.catalog import SEVERITY_FLOOR, get_definition
 from app.models.tables import Asset, Signal, User
@@ -41,13 +42,17 @@ def _clamp(v: float) -> float:
 def _user(session: Session, username: str | None) -> User | None:
     if not username:
         return None
-    return session.exec(select(User).where(User.username == username)).first()
+    return session.exec(
+        select(User).where(User.username == username, User.origin == runtime.current_mode())
+    ).first()
 
 
 def _asset(session: Session, name: str | None) -> Asset | None:
     if not name:
         return None
-    return session.exec(select(Asset).where(Asset.name == name)).first()
+    return session.exec(
+        select(Asset).where(Asset.name == name, Asset.origin == runtime.current_mode())
+    ).first()
 
 
 def score_incident(session: Session, signals: list[Signal], det_id: str,
@@ -110,7 +115,8 @@ def recompute_user_risk(session: Session, username: str | None) -> None:
     if not user:
         return
     incidents = list(session.exec(
-        select(Incident).where(Incident.actor_username == username, Incident.status != "dismissed")
+        select(Incident).where(Incident.actor_username == username, Incident.status != "dismissed",
+                               Incident.origin == runtime.current_mode())
     ))
     if not incidents:
         user.risk_score = max(0.0, user.risk_score * 0.5)
@@ -131,7 +137,8 @@ def recompute_asset_risk(session: Session, asset_name: str | None) -> None:
     if not asset:
         return
     incidents = list(session.exec(
-        select(Incident).where(Incident.target_asset == asset_name, Incident.status != "dismissed")
+        select(Incident).where(Incident.target_asset == asset_name, Incident.status != "dismissed",
+                               Incident.origin == runtime.current_mode())
     ))
     base = asset.sensitivity / 5 * 100
     if incidents:

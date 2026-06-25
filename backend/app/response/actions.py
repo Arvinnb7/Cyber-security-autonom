@@ -9,6 +9,7 @@ from __future__ import annotations
 from sqlmodel import Session, select
 
 from app.connectors.simulators import get_connector
+from app.core import runtime
 from app.core.time import utcnow
 from app.models.tables import AuditAction, Incident, User
 
@@ -27,7 +28,7 @@ def request_action(session: Session, action_type: str, target: str,
         raise ValueError(f"unsupported action: {action_type}")
     action = AuditAction(
         incident_id=incident_id, action_type=action_type, target=target,
-        status="pending", requested_by=requested_by,
+        status="pending", requested_by=requested_by, origin=runtime.current_mode(),
     )
     session.add(action)
     session.commit()
@@ -89,7 +90,7 @@ def reject_action(session: Session, action_id: int, rejected_by: str) -> AuditAc
 
 
 def list_actions(session: Session, status: str | None = None) -> list[AuditAction]:
-    q = select(AuditAction)
+    q = select(AuditAction).where(AuditAction.origin == runtime.current_mode())
     if status:
         q = q.where(AuditAction.status == status)
     return list(session.exec(q.order_by(AuditAction.requested_at.desc())))
