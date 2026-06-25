@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -13,6 +14,12 @@ class Settings(BaseSettings):
     app_name: str = "Sentinel"
     environment: str = "dev"
     database_url: str = "sqlite:///./sentinel.db"
+
+    # --- Data mode -----------------------------------------------------------
+    # "demo" => seed demo org + attack scenarios and run the simulators.
+    # "live" => no demo data, no simulators; only real connectors feed the DB.
+    # Accepts either DATA_MODE or SENTINEL_DATA_MODE.
+    data_mode: str = Field(default="demo", validation_alias=AliasChoices("DATA_MODE", "SENTINEL_DATA_MODE"))
 
     # --- Auth (single-org MVP) ---
     jwt_secret: str = "change-me-in-production-please"
@@ -47,6 +54,14 @@ class Settings(BaseSettings):
     @property
     def ai_enabled(self) -> bool:
         return bool(self.anthropic_api_key)
+
+    @property
+    def is_demo(self) -> bool:
+        return self.data_mode.strip().lower() != "live"
+
+    @property
+    def is_live(self) -> bool:
+        return not self.is_demo
 
 
 @lru_cache

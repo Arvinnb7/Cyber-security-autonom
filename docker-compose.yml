@@ -4,6 +4,8 @@ services:
     ports:
       - "8000:8000"
     environment:
+      # demo => seeded mock data + simulators. live => only real connectors.
+      DATA_MODE: ${DATA_MODE:-demo}
       # Set your key here to enable real Claude analysis (optional).
       SENTINEL_ANTHROPIC_API_KEY: ${SENTINEL_ANTHROPIC_API_KEY:-}
       SENTINEL_DATABASE_URL: sqlite:////data/sentinel.db

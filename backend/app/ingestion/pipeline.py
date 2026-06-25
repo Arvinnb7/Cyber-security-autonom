@@ -47,8 +47,9 @@ def ingest_cycle(session: Session, inject_scenario_prob: float = 0.25) -> int:
     # Live org integrations (real vendor APIs) — the production data path.
     raw.extend(poll_enabled_connections(session))
 
-    # Simulated sources (demo / when no real connection is configured).
-    if settings.sim_enabled:
+    # Simulated sources — demo mode only. In live mode the DB is fed exclusively
+    # by real connectors above.
+    if settings.is_demo and settings.sim_enabled:
         for connector in get_connectors():
             raw.extend(connector.fetch_events())
         if random.random() < inject_scenario_prob:

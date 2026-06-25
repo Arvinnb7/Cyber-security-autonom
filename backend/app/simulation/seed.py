@@ -33,10 +33,14 @@ def seed_scenarios(session: Session) -> int:
     return count
 
 
-def seed_all(session: Session) -> None:
+def seed_all(session: Session, demo: bool = True) -> None:
+    # The detection catalog is product config (source of truth), not demo data —
+    # it is always seeded so detections/scoring work in live mode too.
     added = seed_catalog(session)
     if added:
         logger.info("seeded %d catalog detections", added)
-    seed_org(session)
-    if session.exec(select(Incident)).first() is None:
-        seed_scenarios(session)
+    # Demo organization + attack scenarios are mock data — demo mode only.
+    if demo:
+        seed_org(session)
+        if session.exec(select(Incident)).first() is None:
+            seed_scenarios(session)

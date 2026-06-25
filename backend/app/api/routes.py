@@ -13,6 +13,7 @@ from app.connectors.real.factory import test_connection
 from app.connectors.registry import provider_meta, public_providers, secret_keys, split_credentials
 from app.connectors.simulators import get_connectors
 from app.core.auth import authenticate, create_access_token, get_current_user
+from app.core.config import settings
 from app.core.crypto import decrypt_dict, encrypt_dict
 from app.core.db import get_session
 from app.core.time import utcnow
@@ -50,13 +51,14 @@ DB = Depends(get_session)
 
 @api_router.get("/health")
 def health() -> dict:
-    return {"status": "ok", "ai_enabled": ai_available()}
+    return {"status": "ok", "ai_enabled": ai_available(), "data_mode": settings.data_mode}
 
 
 @api_router.get("/connectors")
 def connectors(_: str = Auth) -> dict:
     return {
         "ai_enabled": ai_available(),
+        "data_mode": settings.data_mode,
         "connectors": [
             {"name": c.name, "label": c.label, "actions": list(c.supported_actions)}
             for c in get_connectors()
@@ -355,6 +357,8 @@ def inject_scenario(body: InjectRequest, _: str = Auth, session: Session = DB) -
     from app.ingestion.pipeline import analyze, ingest_raw_events
     from app.simulation.scenarios import SCENARIOS, generate_scenario, random_scenario
 
+    if settings.is_live:
+        raise HTTPException(status_code=403, detail="demo scenario injection is disabled in live mode")
     if body.scenario and body.scenario not in SCENARIOS:
         raise HTTPException(status_code=400, detail=f"unknown scenario; choose from {list(SCENARIOS)}")
     raw = generate_scenario(body.scenario) if body.scenario else random_scenario()
@@ -367,6 +371,8 @@ def inject_scenario(body: InjectRequest, _: str = Auth, session: Session = DB) -
 def run_cycle(_: str = Auth, session: Session = DB) -> dict:
     from app.ingestion.pipeline import run_full_cycle
 
+    if settings.is_live:
+        raise HTTPException(status_code=403, detail="forced demo cycle is disabled in live mode")
     return run_full_cycle(session, inject_scenario_prob=1.0)
 
 

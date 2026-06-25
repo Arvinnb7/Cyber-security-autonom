@@ -20,13 +20,14 @@ logger = logging.getLogger("sentinel")
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     init_db()
-    if settings.seed_on_startup:
-        from app.simulation.seed import seed_all
+    from app.simulation.seed import seed_all
 
-        with Session(engine) as session:
-            seed_all(session)
+    # Catalog always seeds; demo org/scenarios only in demo mode (and if enabled).
+    with Session(engine) as session:
+        seed_all(session, demo=settings.is_demo and settings.seed_on_startup)
     start_scheduler()
-    logger.info("Sentinel started (env=%s, ai=%s)", settings.environment, settings.ai_enabled)
+    logger.info("Sentinel started (mode=%s, env=%s, ai=%s)",
+                settings.data_mode, settings.environment, settings.ai_enabled)
     yield
     shutdown_scheduler()
 

@@ -36,15 +36,18 @@ def _weekly_report_job() -> None:
 
 def start_scheduler() -> None:
     global _scheduler
-    if _scheduler is not None or not settings.sim_enabled:
+    if _scheduler is not None:
         return
+    # The scheduler runs in BOTH modes: in demo it drives the simulators, in live
+    # it polls the real connectors. The cycle itself decides what data to pull.
     _scheduler = BackgroundScheduler(daemon=True)
     _scheduler.add_job(_ingest_job, "interval", seconds=settings.ingest_interval_seconds,
                        id="ingest", max_instances=1, coalesce=True)
     # Weekly in production; for the demo we also expose a manual trigger via the API.
     _scheduler.add_job(_weekly_report_job, "interval", days=7, id="weekly_report")
     _scheduler.start()
-    logger.info("scheduler started (ingest every %ss)", settings.ingest_interval_seconds)
+    logger.info("scheduler started (mode=%s, ingest every %ss)",
+                settings.data_mode, settings.ingest_interval_seconds)
 
 
 def shutdown_scheduler() -> None:
