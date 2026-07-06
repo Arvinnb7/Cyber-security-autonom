@@ -7,8 +7,8 @@ from app.detection.catalog import seed_catalog, severity_for_score
 from app.detection.correlation import correlate_and_score
 from app.detection.detectors import run_detectors
 from app.ingestion.dedup import event_fingerprint
-from app.ingestion.pipeline import analyze, ingest_raw_events
-from app.models.tables import DetectionDefinition, Incident
+from app.ingestion.pipeline import ingest_raw_events
+from app.models.tables import DetectionDefinition
 from app.scoring.engine import score_incident
 from app.simulation.scenarios import SCENARIOS, generate_scenario
 from app.simulation.seed import seed_org

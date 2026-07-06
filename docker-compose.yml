@@ -1,27 +1,67 @@
+# Production-shaped stack: Postgres + API (multi-worker) + a dedicated scheduler
+# worker + frontend. For a quick local demo you can still run the services with
+# their defaults (data mode = demo).
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: sentinel
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sentinel}
+      POSTGRES_DB: sentinel
+    volumes:
+      - sentinel-pg:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sentinel"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   backend:
     build: ./backend
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATA_MODE: ${DATA_MODE:-demo}
+      SENTINEL_ENVIRONMENT: ${SENTINEL_ENVIRONMENT:-dev}
+      SENTINEL_DATABASE_URL: postgresql+psycopg://sentinel:${POSTGRES_PASSWORD:-sentinel}@postgres:5432/sentinel
+      SENTINEL_JWT_SECRET: ${SENTINEL_JWT_SECRET:-change-me-in-production-please}
+      SENTINEL_ENCRYPTION_KEY: ${SENTINEL_ENCRYPTION_KEY:-}
+      SENTINEL_ANTHROPIC_API_KEY: ${SENTINEL_ANTHROPIC_API_KEY:-}
+      SENTINEL_CORS_ORIGINS: ${SENTINEL_CORS_ORIGINS:-http://localhost:3000}
+      SENTINEL_ATTACK_MODELS_DIR: /attack_models
+      # API workers do NOT run the scheduler — the worker service does.
+      SENTINEL_RUN_SCHEDULER: "false"
+    volumes:
+      - ./data/attack_models:/attack_models:ro
     ports:
       - "8000:8000"
+
+  worker:
+    build: ./backend
+    depends_on:
+      backend:
+        condition: service_healthy
     environment:
-      # demo => seeded mock data + simulators. live => only real connectors.
       DATA_MODE: ${DATA_MODE:-demo}
-      # Set your key here to enable real Claude analysis (optional).
+      SENTINEL_DATABASE_URL: postgresql+psycopg://sentinel:${POSTGRES_PASSWORD:-sentinel}@postgres:5432/sentinel
+      SENTINEL_JWT_SECRET: ${SENTINEL_JWT_SECRET:-change-me-in-production-please}
+      SENTINEL_ENCRYPTION_KEY: ${SENTINEL_ENCRYPTION_KEY:-}
       SENTINEL_ANTHROPIC_API_KEY: ${SENTINEL_ANTHROPIC_API_KEY:-}
-      SENTINEL_DATABASE_URL: sqlite:////data/sentinel.db
       SENTINEL_ATTACK_MODELS_DIR: /attack_models
+      SENTINEL_RUN_SCHEDULER: "true"
     volumes:
-      - sentinel-data:/data
       - ./data/attack_models:/attack_models:ro
+    command: ["python", "-m", "app.worker"]
 
   frontend:
     build: ./frontend
-    ports:
-      - "3000:3000"
-    environment:
-      BACKEND_URL: http://backend:8000
     depends_on:
       - backend
+    environment:
+      BACKEND_URL: http://backend:8000
+    ports:
+      - "3000:3000"
 
 volumes:
-  sentinel-data:
+  sentinel-pg:

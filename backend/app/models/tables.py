@@ -97,11 +97,16 @@ class Connection(SQLModel, table=True):
     provider: str = Field(index=True)                 # e.g. "microsoft_365"
     display_name: str = ""
     enabled: bool = True
+    # Safety guardrail: real response actions only fire when explicitly enabled.
+    allow_actions: bool = False
     config: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     secrets_enc: str = ""                              # Fernet-encrypted JSON of secret fields
     status: str = "unknown"                            # unknown | connected | error
     last_error: str = ""
     last_sync: Optional[datetime] = None
+    # Incremental-sync state so live connectors only pull new events.
+    sync_cursor: str = ""
+    consecutive_failures: int = 0
     created_at: datetime = Field(default_factory=utcnow)
     updated_at: datetime = Field(default_factory=utcnow)
 

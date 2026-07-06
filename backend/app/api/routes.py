@@ -65,6 +65,19 @@ def health() -> dict:
     return {"status": "ok", "ai_enabled": ai_available(), "data_mode": runtime.current_mode()}
 
 
+@api_router.get("/ready")
+def ready(session: Session = DB):
+    """Readiness probe: verifies the database is reachable (503 if not)."""
+    from fastapi.responses import JSONResponse
+    from sqlalchemy import text
+
+    try:
+        session.exec(text("SELECT 1"))
+        return {"status": "ready"}
+    except Exception as exc:  # noqa: BLE001
+        return JSONResponse(status_code=503, content={"status": "not_ready", "detail": str(exc)})
+
+
 @api_router.get("/connectors")
 def connectors(_: str = Auth) -> dict:
     return {
@@ -306,6 +319,7 @@ def request_action(body: ActionRequest, request: Request, account: Account = Ana
         raise HTTPException(status_code=400, detail=str(exc))
     record_audit(session, account.username, "action.request",
                  target=f"{body.action_type}:{body.target}", request=request)
+    session.refresh(action)  # record_audit's commit expired it
     return action.model_dump()
 
 
@@ -318,6 +332,7 @@ def approve_action(action_id: int, request: Request, account: Account = AdminOnl
         raise HTTPException(status_code=404, detail=str(exc))
     record_audit(session, account.username, "action.approve",
                  target=f"{action.action_type}:{action.target}", request=request)
+    session.refresh(action)
     return action.model_dump()
 
 
@@ -329,6 +344,7 @@ def reject_action(action_id: int, request: Request, account: Account = AdminOnly
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
     record_audit(session, account.username, "action.reject", target=str(action_id), request=request)
+    session.refresh(action)
     return action.model_dump()
 
 
@@ -445,6 +461,7 @@ def create_connection(body: ConnectionCreate, request: Request, account: Account
         provider=body.provider,
         display_name=body.display_name or body.provider,
         enabled=body.enabled,
+        allow_actions=body.allow_actions,
         config=public,
         secrets_enc=encrypt_dict(secrets),
     )
@@ -466,6 +483,8 @@ def update_connection(conn_id: int, body: ConnectionUpdate, request: Request,
         conn.display_name = body.display_name
     if body.enabled is not None:
         conn.enabled = body.enabled
+    if body.allow_actions is not None:
+        conn.allow_actions = body.allow_actions
     if body.credentials:
         public, secrets = split_credentials(conn.provider, body.credentials)
         conn.config = {**conn.config, **public}
@@ -577,10 +596,12 @@ def _asset_brief(a: Asset) -> dict:
 def _connection_brief(c: Connection) -> dict:
     # Never return raw secrets — only which secret fields are set.
     set_secrets = sorted(decrypt_dict(c.secrets_enc).keys())
+    meta = provider_meta(c.provider) or {}
     return {
         "id": c.id, "provider": c.provider, "display_name": c.display_name,
-        "enabled": c.enabled, "status": c.status, "last_error": c.last_error,
-        "last_sync": c.last_sync, "config": c.config,
-        "secrets_set": set_secrets,
+        "enabled": c.enabled, "allow_actions": c.allow_actions,
+        "status": c.status, "last_error": c.last_error, "last_sync": c.last_sync,
+        "config": c.config, "secrets_set": set_secrets,
         "required_secrets": sorted(secret_keys(c.provider)),
+        "supported_actions": meta.get("actions", []),
     }

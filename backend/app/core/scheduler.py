@@ -34,20 +34,40 @@ def _weekly_report_job() -> None:
         logger.exception("weekly report job failed")
 
 
+def _retention_job() -> None:
+    """Purge raw events/signals past the retention window (incidents are kept)."""
+    from datetime import timedelta
+
+    from sqlmodel import delete
+
+    from app.core.time import utcnow
+    from app.models.tables import Event, Signal
+
+    try:
+        cutoff = utcnow() - timedelta(days=settings.retention_days)
+        with Session(engine) as session:
+            session.exec(delete(Signal).where(Signal.created_at < cutoff))
+            session.exec(delete(Event).where(Event.timestamp < cutoff))
+            session.commit()
+    except Exception:  # noqa: BLE001
+        logger.exception("retention job failed")
+
+
 def start_scheduler() -> None:
     global _scheduler
-    if _scheduler is not None:
+    if _scheduler is not None or not settings.run_scheduler:
         return
-    # The scheduler runs in BOTH modes: in demo it drives the simulators, in live
-    # it polls the real connectors. The cycle itself decides what data to pull.
+    # Runs in both data modes (demo drives simulators, live polls real connectors).
+    # In production, only ONE process should run this (a dedicated worker); API
+    # workers set SENTINEL_RUN_SCHEDULER=false to avoid duplicate ingestion.
     _scheduler = BackgroundScheduler(daemon=True)
     _scheduler.add_job(_ingest_job, "interval", seconds=settings.ingest_interval_seconds,
                        id="ingest", max_instances=1, coalesce=True)
-    # Weekly in production; for the demo we also expose a manual trigger via the API.
     _scheduler.add_job(_weekly_report_job, "interval", days=7, id="weekly_report")
+    _scheduler.add_job(_retention_job, "interval", days=1, id="retention")
     _scheduler.start()
-    logger.info("scheduler started (mode=%s, ingest every %ss)",
-                settings.data_mode, settings.ingest_interval_seconds)
+    logger.info("scheduler started (mode=%s, ingest every %ss, retention %sd)",
+                settings.data_mode, settings.ingest_interval_seconds, settings.retention_days)
 
 
 def shutdown_scheduler() -> None:

@@ -266,6 +266,19 @@ const DICT: Record<string, { en: string; fa: string }> = {
   "status.pending": { en: "pending", fa: "در انتظار" },
   "status.executed": { en: "executed", fa: "اجرا‌شده" },
   "status.rejected": { en: "rejected", fa: "رد‌شده" },
+  "status.blocked": { en: "blocked", fa: "مسدود (سیاست)" },
+  "status.failed": { en: "failed", fa: "ناموفق" },
+
+  // automated response (integrations)
+  "int.response": { en: "Automated response", fa: "واکنش خودکار" },
+  "int.responseOn": { en: "actions enabled", fa: "اکشن‌ها فعال" },
+  "int.responseOff": { en: "actions disabled", fa: "اکشن‌ها غیرفعال" },
+  "int.enableActions": { en: "Enable actions", fa: "فعال‌کردن اکشن‌ها" },
+  "int.disableActions": { en: "Disable actions", fa: "غیرفعال‌کردن اکشن‌ها" },
+  "int.responseHint": {
+    en: "When on, approved response actions really execute against this source.",
+    fa: "وقتی روشن باشد، اکشن‌های تأییدشده واقعاً روی این سرویس اجرا می‌شوند.",
+  },
 };
 
 type Ctx = { lang: Lang; dir: "rtl" | "ltr"; setLang: (l: Lang) => void; t: (key: string) => string };

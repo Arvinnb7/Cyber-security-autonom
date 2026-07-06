@@ -7,16 +7,24 @@ detection engine works on real tenant data.
 """
 from __future__ import annotations
 
+import secrets as _secrets
 from datetime import datetime, timezone
 
 import httpx
 
-from app.connectors.base import RawEvent
+from app.connectors.base import ActionResult, RawEvent
 from app.connectors.real.base import ConnectorError, RealConnector
 
 GRAPH = "https://graph.microsoft.com/v1.0"
 LOGIN = "https://login.microsoftonline.com"
 TIMEOUT = 20.0
+
+
+def _graph_time(cursor: str | None) -> str | None:
+    """Format an ISO cursor for a Graph $filter (must end with Z)."""
+    if not cursor:
+        return None
+    return cursor if cursor.endswith("Z") else cursor.split("+")[0] + "Z"
 
 
 def _parse_ts(value: str | None) -> datetime:
@@ -30,6 +38,7 @@ def _parse_ts(value: str | None) -> datetime:
 
 class Microsoft365Connector(RealConnector):
     provider = "microsoft_365"
+    supported_actions = ("block_user", "kill_session", "reset_password")
 
     def _token(self) -> str:
         tenant = self.config.get("tenant_id")
@@ -68,16 +77,28 @@ class Microsoft365Connector(RealConnector):
             raise ConnectorError(f"Graph error ({resp.status_code}): {resp.text[:200]}")
         return resp.json().get("value", [])
 
-    def fetch_events(self) -> list[RawEvent]:
+    def _write(self, token: str, method: str, path: str, json: dict | None = None) -> tuple[int, str]:
+        try:
+            resp = httpx.request(method, f"{GRAPH}/{path}",
+                                 headers={"Authorization": f"Bearer {token}"}, json=json, timeout=TIMEOUT)
+        except httpx.HTTPError as exc:
+            raise ConnectorError(f"Graph request failed: {exc}") from exc
+        return resp.status_code, resp.text
+
+    def fetch_events(self, cursor: str | None = None) -> list[RawEvent]:
         token = self._token()
+        since = _graph_time(cursor)
         events: list[RawEvent] = []
-        events.extend(self._signins(token))
-        events.extend(self._directory_audits(token))
+        events.extend(self._signins(token, since))
+        events.extend(self._directory_audits(token, since))
         return events
 
-    def _signins(self, token: str) -> list[RawEvent]:
+    def _signins(self, token: str, since: str | None = None) -> list[RawEvent]:
         out: list[RawEvent] = []
-        for s in self._get(token, "auditLogs/signIns?$top=100&$orderby=createdDateTime desc"):
+        query = "auditLogs/signIns?$top=100&$orderby=createdDateTime desc"
+        if since:
+            query += f"&$filter=createdDateTime gt {since}"
+        for s in self._get(token, query):
             status = s.get("status", {}) or {}
             failed = status.get("errorCode", 0) not in (0, None)
             loc = s.get("location", {}) or {}
@@ -106,9 +127,12 @@ class Microsoft365Connector(RealConnector):
             ))
         return out
 
-    def _directory_audits(self, token: str) -> list[RawEvent]:
+    def _directory_audits(self, token: str, since: str | None = None) -> list[RawEvent]:
         out: list[RawEvent] = []
-        for a in self._get(token, "auditLogs/directoryAudits?$top=100&$orderby=activityDateTime desc"):
+        query = "auditLogs/directoryAudits?$top=100&$orderby=activityDateTime desc"
+        if since:
+            query += f"&$filter=activityDateTime gt {since}"
+        for a in self._get(token, query):
             initiated = (a.get("initiatedBy", {}) or {}).get("user", {}) or {}
             activity = (a.get("activityDisplayName") or "").lower()
             action = "config_change"
@@ -131,3 +155,35 @@ class Microsoft365Connector(RealConnector):
                 raw=raw_extra,
             ))
         return out
+
+    # --- real response actions (Microsoft Graph) --------------------------
+
+    def execute_action(self, action_type: str, target: str) -> ActionResult:
+        if action_type not in self.supported_actions:
+            return ActionResult(success=False, detail=f"microsoft_365 cannot perform '{action_type}'")
+        if not target:
+            return ActionResult(success=False, detail="no target user specified")
+        token = self._token()
+
+        if action_type == "block_user":
+            code, text = self._write(token, "PATCH", f"users/{target}", {"accountEnabled": False})
+            perm = "User.ReadWrite.All"
+            ok_detail = f"disabled Azure AD account {target}"
+        elif action_type == "kill_session":
+            code, text = self._write(token, "POST", f"users/{target}/revokeSignInSessions")
+            perm = "User.ReadWrite.All"
+            ok_detail = f"revoked all sign-in sessions for {target}"
+        else:  # reset_password
+            new_pw = _secrets.token_urlsafe(16) + "Aa1!"
+            code, text = self._write(token, "PATCH", f"users/{target}",
+                                     {"passwordProfile": {"forceChangePasswordNextSignIn": True,
+                                                          "password": new_pw}})
+            perm = "User-PasswordProfile.ReadWrite.All"
+            ok_detail = f"forced password reset for {target}"
+
+        if code in (200, 204):
+            return ActionResult(success=True, detail=ok_detail)
+        if code == 403:
+            return ActionResult(success=False,
+                                detail=f"access denied — grant application permission '{perm}' and admin-consent it")
+        return ActionResult(success=False, detail=f"Graph error ({code}): {text[:200]}")

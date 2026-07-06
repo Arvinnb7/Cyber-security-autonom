@@ -38,11 +38,24 @@ def test_connection(connection: Connection) -> tuple[bool, str]:
     return connector.test()
 
 
-def poll_enabled_connections(session: Session):
-    """Fetch events from all enabled, implemented connections.
+def get_action_connector(session: Session, provider: str) -> RealConnector | None:
+    """Return a built connector from the first enabled connection for a provider."""
+    conn = session.exec(
+        select(Connection).where(Connection.provider == provider, Connection.enabled == True)  # noqa: E712
+    ).first()
+    return build_connector(conn) if conn else None
 
-    Yields RawEvent batches and updates each connection's status/last_sync. Never
-    raises — a broken integration is recorded and skipped.
+
+# Skip a connection for a while after this many consecutive failures (backoff).
+_MAX_FAILURES = 5
+
+
+def poll_enabled_connections(session: Session):
+    """Incrementally fetch events from all enabled, implemented connections.
+
+    Uses each connection's ``sync_cursor`` so only new events are pulled, applies
+    a simple consecutive-failure backoff, and records health. Never raises — a
+    broken integration is recorded and skipped.
     """
     connections = session.exec(select(Connection).where(Connection.enabled == True)).all()  # noqa: E712
     raw_events = []
@@ -50,19 +63,30 @@ def poll_enabled_connections(session: Session):
         connector = build_connector(conn)
         if connector is None:
             continue
+        # Backoff: after too many failures, only retry occasionally.
+        if conn.consecutive_failures >= _MAX_FAILURES and conn.consecutive_failures % 5 != 0:
+            conn.consecutive_failures += 1
+            session.add(conn)
+            continue
         try:
-            events = connector.fetch_events()
+            events = connector.fetch_events(conn.sync_cursor or None)
             raw_events.extend(events)
+            new_cursor = connector.cursor_from(events)
+            if new_cursor:
+                conn.sync_cursor = new_cursor
             conn.status = "connected"
             conn.last_error = ""
             conn.last_sync = utcnow()
+            conn.consecutive_failures = 0
         except ConnectorError as exc:
             conn.status = "error"
             conn.last_error = str(exc)
+            conn.consecutive_failures += 1
             logger.warning("connection %s (%s) error: %s", conn.id, conn.provider, exc)
         except Exception as exc:  # noqa: BLE001
             conn.status = "error"
             conn.last_error = f"Unexpected: {exc}"
+            conn.consecutive_failures += 1
             logger.exception("connection %s poll failed", conn.id)
         conn.updated_at = utcnow()
         session.add(conn)

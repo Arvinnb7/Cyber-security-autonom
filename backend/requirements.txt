@@ -1,5 +1,6 @@
 fastapi==0.115.6
 uvicorn[standard]==0.34.0
+gunicorn==23.0.0
 sqlmodel==0.0.22
 pydantic==2.10.4
 pydantic-settings==2.7.1
@@ -9,3 +10,8 @@ python-jose[cryptography]==3.3.0
 bcrypt==5.0.0
 python-multipart==0.0.20
 httpx==0.28.1
+alembic==1.14.0
+psycopg[binary]==3.2.3
+prometheus-fastapi-instrumentator==7.0.0
+sentry-sdk[fastapi]==2.19.2
+python-json-logger==3.2.1

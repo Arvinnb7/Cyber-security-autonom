@@ -57,10 +57,12 @@ class ConnectionCreate(BaseModel):
     provider: str
     display_name: str = ""
     enabled: bool = True
+    allow_actions: bool = False
     credentials: dict[str, Any] = {}
 
 
 class ConnectionUpdate(BaseModel):
     display_name: str | None = None
     enabled: bool | None = None
+    allow_actions: bool | None = None
     credentials: dict[str, Any] | None = None

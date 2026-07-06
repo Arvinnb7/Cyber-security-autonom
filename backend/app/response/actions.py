@@ -8,10 +8,11 @@ from __future__ import annotations
 
 from sqlmodel import Session, select
 
+from app.connectors.real.factory import build_connector
 from app.connectors.simulators import get_connector
 from app.core import runtime
 from app.core.time import utcnow
-from app.models.tables import AuditAction, Incident, User
+from app.models.tables import AuditAction, Connection, Incident, User
 
 # action -> (label, which connector executes it)
 AVAILABLE_ACTIONS = {
@@ -20,6 +21,39 @@ AVAILABLE_ACTIONS = {
     "kill_session": {"label": "Kill Session", "connector": "microsoft_365"},
     "block_ip": {"label": "Block IP", "connector": "cloudflare"},
 }
+
+# Which live provider(s) can execute each action (Azure AD shares M365's connector).
+_ACTION_PROVIDERS = {
+    "block_user": ["microsoft_365", "azure"],
+    "reset_password": ["microsoft_365", "azure"],
+    "kill_session": ["microsoft_365", "azure"],
+    "block_ip": ["cloudflare"],
+}
+
+
+def _execute_live(session: Session, action_type: str, target: str) -> tuple[str, str]:
+    """Run a real response action against a live integration. Returns (status, detail).
+
+    Guardrail: only executes when an enabled connection exists AND it has
+    ``allow_actions`` turned on; otherwise it is blocked by policy.
+    """
+    providers = _ACTION_PROVIDERS.get(action_type, [])
+    conn = session.exec(
+        select(Connection).where(Connection.provider.in_(providers), Connection.enabled == True)  # noqa: E712
+    ).first()
+    if conn is None:
+        return "failed", f"no enabled integration for '{action_type}' (providers: {', '.join(providers)})"
+    if not conn.allow_actions:
+        return "blocked", (f"blocked by policy — enable automated response on the "
+                           f"'{conn.display_name or conn.provider}' integration first")
+    connector = build_connector(conn)
+    if connector is None:
+        return "failed", f"no live connector for provider '{conn.provider}'"
+    try:
+        result = connector.execute_action(action_type, target)
+    except Exception as exc:  # noqa: BLE001 - surface any vendor/auth error as a failed action
+        return "failed", f"{type(exc).__name__}: {exc}"
+    return ("executed" if result.success else "failed"), result.detail
 
 
 def request_action(session: Session, action_type: str, target: str,
@@ -43,28 +77,32 @@ def approve_action(session: Session, action_id: int, approved_by: str) -> AuditA
     if action.status != "pending":
         return action
 
-    spec = AVAILABLE_ACTIONS[action.action_type]
-    connector = get_connector(spec["connector"])
-    detail = "executed (simulated)"
-    if connector is not None:
-        result = connector.execute_action(action.action_type, action.target)
-        detail = result.detail
+    if runtime.is_live():
+        # Real execution against the customer's live integration (guardrailed).
+        status, detail = _execute_live(session, action.action_type, action.target)
+    else:
+        # Demo mode: safe simulated execution.
+        spec = AVAILABLE_ACTIONS[action.action_type]
+        connector = get_connector(spec["connector"])
+        detail = connector.execute_action(action.action_type, action.target).detail \
+            if connector is not None else "executed (simulated)"
+        status = "executed"
 
-    # Reflect side effects in the model where meaningful.
-    if action.action_type == "block_user":
+    # Reflect side effects in the demo model where meaningful.
+    if status == "executed" and action.action_type == "block_user":
         user = session.exec(select(User).where(User.username == action.target)).first()
         if user:
             user.is_blocked = True
             session.add(user)
 
-    action.status = "executed"
+    action.status = status
     action.approved_by = approved_by
     action.result = detail
     action.resolved_at = utcnow()
     session.add(action)
 
-    # Mark the incident as being handled.
-    if action.incident_id:
+    # Mark the incident as being handled (only if the action actually ran).
+    if status == "executed" and action.incident_id:
         incident = session.get(Incident, action.incident_id)
         if incident and incident.status == "open":
             incident.status = "investigating"

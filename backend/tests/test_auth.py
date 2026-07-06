@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 from app.api import api_router
 from app.core.db import get_session
 from app.core.security import hash_password, verify_password
-from app.models.tables import Account, AuditLog, Organization
+from app.models.tables import Account, Organization
 
 
 @pytest.fixture
@@ -89,3 +89,9 @@ def test_admin_creates_account_with_role(client):
 def test_unauthenticated_is_rejected(client):
     assert client.get("/api/me").status_code == 401
     assert client.get("/api/dashboard/overview").status_code == 401
+
+
+def test_ready_endpoint(client):
+    r = client.get("/api/ready")
+    assert r.status_code == 200
+    assert r.json()["status"] == "ready"

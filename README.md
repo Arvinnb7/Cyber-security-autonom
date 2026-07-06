@@ -113,6 +113,35 @@ Without a key everything still works via rule-based fallbacks — look for the
 
 ---
 
+## Real response actions (not a demo)
+
+When an incident fires, an admin can execute a **real** containment action against
+the connected source — not a simulated one:
+
+- **Microsoft 365 / Azure AD** actions run via Microsoft Graph: `Block user`
+  (`accountEnabled=false`), `Kill session` (revoke sign-in sessions), `Reset
+  password` (force change). They require the app registration to also have
+  `User.ReadWrite.All`.
+- **Safety guardrail:** real execution only happens when you turn on **Automated
+  response** for that integration (Integrations page). Otherwise the action is
+  recorded as `blocked by policy`. Manager approval + full audit still apply.
+- In **demo mode** actions are always safely simulated.
+
+## Production deployment
+
+- **Database:** PostgreSQL in production (SQLite for dev). Schema is managed by
+  **Alembic** migrations, applied automatically on startup.
+- **Scale:** the API runs as multiple stateless Gunicorn/Uvicorn workers; a single
+  dedicated **worker** container runs the scheduler (ingestion, weekly report,
+  retention) so jobs aren't duplicated. `docker compose up` brings up Postgres +
+  API + worker + frontend.
+- **Observability:** structured JSON logs (`SENTINEL_JSON_LOGS=true`), Prometheus
+  metrics at `/metrics`, liveness `/api/health` + readiness `/api/ready`, and
+  optional Sentry error tracking (`SENTINEL_SENTRY_DSN`).
+- **Data retention:** raw events/signals older than `SENTINEL_RETENTION_DAYS`
+  (default 90) are purged automatically; incidents are kept.
+- **CI:** GitHub Actions lints, tests and builds on every push/PR.
+
 ## Users, roles & security
 
 Sentinel has real multi-user auth with **role-based access control**:

@@ -47,6 +47,15 @@ class Settings(BaseSettings):
     sim_enabled: bool = True
     ingest_interval_seconds: int = 20            # how often connectors are polled
     seed_on_startup: bool = True                 # generate demo scenarios at boot
+    # Run the background scheduler in this process. Disable on API workers and run
+    # it in a single dedicated worker container in production.
+    run_scheduler: bool = True
+    retention_days: int = 90                     # purge events/signals older than this
+
+    # --- Observability ---
+    sentry_dsn: str | None = None                # enable error tracking when set
+    metrics_enabled: bool = True                 # expose Prometheus /metrics
+    json_logs: bool = False                      # structured JSON logging (prod)
     # Where user-provided attack-model files live (the plug-in point). Empty =>
     # default to <repo>/data/attack_models resolved relative to this package.
     attack_models_dir: str = ""

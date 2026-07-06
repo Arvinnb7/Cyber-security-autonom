@@ -41,6 +41,10 @@ export default function IntegrationsPage() {
     await api.deleteConnection(c.id);
     reload();
   }
+  async function toggleActions(c: any) {
+    await api.updateConnection(c.id, { allow_actions: !c.allow_actions });
+    reload();
+  }
 
   return (
     <>
@@ -120,6 +124,23 @@ export default function IntegrationsPage() {
                 )}
                 {c.last_error && !tr && (
                   <div className="mt-3 rounded-lg bg-risk-critical/10 p-2 text-xs text-risk-critical">{c.last_error}</div>
+                )}
+
+                {(c.supported_actions?.length > 0) && (
+                  <div className="mt-3 rounded-lg border border-ink-700/60 bg-ink-850/60 p-2.5">
+                    <div className="flex items-center justify-between">
+                      <div className="text-xs">
+                        <div className="text-slate-300">{t("int.response")}</div>
+                        <div className={c.allow_actions ? "text-risk-low" : "text-slate-500"}>
+                          {c.allow_actions ? `● ${t("int.responseOn")}` : `○ ${t("int.responseOff")}`}
+                        </div>
+                      </div>
+                      <button className="btn px-2.5 py-1 text-xs" onClick={() => toggleActions(c)}>
+                        {c.allow_actions ? t("int.disableActions") : t("int.enableActions")}
+                      </button>
+                    </div>
+                    <div className="mt-1.5 text-[11px] text-slate-500">{t("int.responseHint")}</div>
+                  </div>
                 )}
 
                 <div className="mt-3 flex flex-wrap gap-2">

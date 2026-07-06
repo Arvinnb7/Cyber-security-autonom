@@ -36,6 +36,8 @@ export function StatusPill({ status }: { status: string }) {
     pending: "#facc15",
     executed: "#34d399",
     rejected: "#64748b",
+    blocked: "#fb923c",
+    failed: "#f43f5e",
   };
   const color = map[status] || "#94a3b8";
   return (

@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import logging
 
-from sqlmodel import Session, select
+from sqlmodel import Session
 
 from app.core.config import settings
 from app.core.time import utcnow

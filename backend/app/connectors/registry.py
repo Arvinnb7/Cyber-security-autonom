@@ -15,8 +15,10 @@ from typing import Any
 PROVIDERS: dict[str, dict[str, Any]] = {
     "microsoft_365": {
         "label": "Microsoft 365 / Azure AD",
-        "doc": "Azure AD app registration with AuditLog.Read.All (application) permission.",
+        "doc": "Azure AD app registration with AuditLog.Read.All (application) permission. "
+               "For response actions also grant User.ReadWrite.All.",
         "implemented": True,
+        "actions": ["block_user", "kill_session", "reset_password"],
         "fields": [
             {"key": "tenant_id", "label": "Tenant ID", "secret": False},
             {"key": "client_id", "label": "Client ID", "secret": False},
@@ -27,6 +29,7 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         "label": "Azure (Entra ID)",
         "doc": "Same Azure AD app registration as Microsoft 365 (Graph sign-in logs).",
         "implemented": True,
+        "actions": ["block_user", "kill_session", "reset_password"],
         "fields": [
             {"key": "tenant_id", "label": "Tenant ID", "secret": False},
             {"key": "client_id", "label": "Client ID", "secret": False},
@@ -114,6 +117,7 @@ def split_credentials(provider: str, credentials: dict) -> tuple[dict, dict]:
 def public_providers() -> list[dict]:
     return [
         {"provider": key, "label": m["label"], "doc": m["doc"],
-         "implemented": m["implemented"], "fields": m["fields"]}
+         "implemented": m["implemented"], "fields": m["fields"],
+         "actions": m.get("actions", [])}
         for key, m in PROVIDERS.items()
     ]
