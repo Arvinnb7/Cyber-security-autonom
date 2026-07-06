@@ -5,13 +5,30 @@ import logging
 
 from sqlmodel import Session, select
 
+from app.core.config import settings
+from app.core.security import hash_password
 from app.detection.catalog import seed_catalog
 from app.ingestion.pipeline import analyze, ingest_raw_events
-from app.models.tables import Asset, Incident, User
+from app.models.tables import Account, Asset, Incident, Organization, User
 from app.simulation.org import DEMO_ASSETS, DEMO_USERS
 from app.simulation.scenarios import SCENARIOS, generate_scenario
 
 logger = logging.getLogger("sentinel.seed")
+
+
+def seed_identity(session: Session) -> None:
+    """Ensure a default organization and a bootstrap admin account exist."""
+    if session.get(Organization, 1) is None:
+        session.add(Organization(id=1, name="Default Organization", slug="default"))
+        session.commit()
+    if session.exec(select(Account)).first() is None:
+        session.add(Account(
+            org_id=1, username=settings.admin_username, email="",
+            hashed_password=hash_password(settings.admin_password),
+            role="admin", is_active=True,
+        ))
+        session.commit()
+        logger.info("seeded bootstrap admin account '%s'", settings.admin_username)
 
 
 def seed_org(session: Session) -> None:
@@ -34,6 +51,8 @@ def seed_scenarios(session: Session) -> int:
 
 
 def seed_all(session: Session, demo: bool = True) -> None:
+    # Identity (org + bootstrap admin) is always seeded, in every mode.
+    seed_identity(session)
     # The detection catalog is product config (source of truth), not demo data —
     # it is always seeded so detections/scoring work in live mode too.
     added = seed_catalog(session)

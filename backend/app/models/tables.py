@@ -30,6 +30,42 @@ class AppState(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
+class Organization(SQLModel, table=True):
+    """A tenant. On-prem deploys use a single default org; SaaS adds more (Phase 5)."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = "Default Organization"
+    slug: str = Field(default="default", index=True, unique=True)
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class Account(SQLModel, table=True):
+    """A human user of the platform (distinct from a monitored ``User``)."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    org_id: int = Field(default=1, foreign_key="organization.id", index=True)
+    username: str = Field(index=True, unique=True)
+    email: str = ""
+    hashed_password: str = ""
+    role: str = Field(default="viewer", index=True)   # admin | analyst | viewer
+    is_active: bool = True
+    last_login: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=utcnow)
+
+
+class AuditLog(SQLModel, table=True):
+    """Tamper-evident trail of who did what (security/compliance)."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    org_id: int = Field(default=1, index=True)
+    actor: str = Field(default="system", index=True)  # account username
+    action: str = Field(index=True)                   # e.g. "mode.switch", "action.approve"
+    target: str = ""                                  # affected entity
+    detail: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    ip: str = ""
+    created_at: datetime = Field(default_factory=utcnow, index=True)
+
+
 class DetectionDefinition(SQLModel, table=True):
     """A detection from the MVP catalog (source of truth, DET-001..DET-010)."""
 

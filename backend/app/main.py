@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlmodel import Session
 
@@ -19,6 +19,13 @@ logger = logging.getLogger("sentinel")
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # Fail fast in production if secrets are still at insecure built-in defaults.
+    insecure = settings.insecure_defaults()
+    if insecure:
+        msg = f"insecure default(s) in use: {', '.join(insecure)}"
+        if settings.is_production:
+            raise RuntimeError(f"Refusing to start in production — {msg}. Set them via env.")
+        logger.warning("SECURITY: %s (fine for dev, MUST be set in production).", msg)
     init_db()
     from app.core import runtime
     from app.simulation.seed import seed_all
@@ -40,11 +47,26 @@ app = FastAPI(title="Sentinel — Autonomous Network Security Monitoring", versi
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # MVP single-tenant; tighten for production
+    allow_origins=settings.cors_origin_list,   # explicit allow-list, not "*"
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    # Strict CSP on the JSON API only — leave /docs (Swagger UI) usable.
+    if request.url.path.startswith("/api"):
+        response.headers["Content-Security-Policy"] = "default-src 'none'; frame-ancestors 'none'"
+    if settings.is_production:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    return response
+
 
 app.include_router(api_router)
 

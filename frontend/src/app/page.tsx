@@ -6,9 +6,11 @@ import RiskGauge from "@/components/RiskGauge";
 import { AiBadge, PageHeader, RiskPill, Spinner, StatusPill } from "@/components/ui";
 import { api } from "@/lib/api";
 import { detName, useLang } from "@/lib/i18n";
+import { useMe } from "@/lib/me";
 
 export default function Dashboard() {
   const { t, lang } = useLang();
+  const { isAdmin } = useMe();
   const [data, setData] = useState<any>(null);
   const [aiOn, setAiOn] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -56,9 +58,11 @@ export default function Dashboard() {
         right={
           <div className="flex items-center gap-2">
             <AiBadge on={aiOn} />
-            <button className="btn" onClick={inject} disabled={busy}>
-              {busy ? t("dash.simulating") : t("dash.simulate")}
-            </button>
+            {isAdmin && (
+              <button className="btn" onClick={inject} disabled={busy}>
+                {busy ? t("dash.simulating") : t("dash.simulate")}
+              </button>
+            )}
           </div>
         }
       />

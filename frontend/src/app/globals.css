@@ -37,6 +37,9 @@ body {
   .nav-link-active {
     @apply bg-accent/15 text-accent-soft;
   }
+  .fld {
+    @apply w-full rounded-xl border border-ink-600 bg-ink-950 px-3 py-2 text-sm outline-none focus:border-accent/60;
+  }
 }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }

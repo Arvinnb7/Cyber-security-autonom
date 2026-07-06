@@ -1,9 +1,9 @@
 """REST API surfacing all ten product features."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import time
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
 
@@ -13,11 +13,15 @@ from app.connectors.real.factory import test_connection
 from app.connectors.registry import provider_meta, public_providers, secret_keys, split_credentials
 from app.connectors.simulators import get_connectors
 from app.core import runtime
-from app.core.auth import authenticate, create_access_token, get_current_user
+from app.core.audit import record_audit
+from app.core.auth import get_current_account, get_current_user, require_role
 from app.core.crypto import decrypt_dict, encrypt_dict
 from app.core.db import get_session
+from app.core.security import create_access_token, hash_password, verify_password
 from app.core.time import utcnow
 from app.models.schemas import (
+    AccountCreate,
+    AccountUpdate,
     ActionRequest,
     ChatRequest,
     ChatResponse,
@@ -29,8 +33,10 @@ from app.models.schemas import (
     Token,
 )
 from app.models.tables import (
+    Account,
     Asset,
     AuditAction,
+    AuditLog,
     Connection,
     DetectionDefinition,
     Incident,
@@ -46,6 +52,10 @@ api_router = APIRouter(prefix="/api")
 # Authenticated dependency reused on protected routers.
 Auth = Depends(get_current_user)
 DB = Depends(get_session)
+# RBAC helpers: any authenticated account, or a minimum role tier.
+Account_ = Depends(get_current_account)
+AdminOnly = Depends(require_role("admin"))
+AnalystUp = Depends(require_role("analyst"))  # admin implicitly included
 
 
 # --- Health & meta --------------------------------------------------------
@@ -67,7 +77,7 @@ def connectors(_: str = Auth) -> dict:
     }
 
 
-# --- Data mode (switch demo <-> live live, in-app) ------------------------
+# --- Data mode (switch demo <-> live live, in-app) — admin only -----------
 
 @api_router.get("/mode")
 def get_mode(_: str = Auth) -> dict:
@@ -75,7 +85,7 @@ def get_mode(_: str = Auth) -> dict:
 
 
 @api_router.post("/mode")
-def set_mode(body: ModeUpdate, _: str = Auth, session: Session = DB) -> dict:
+def set_mode(body: ModeUpdate, request: Request, account: Account = AdminOnly, session: Session = DB) -> dict:
     try:
         mode = runtime.set_mode(session, body.data_mode)
     except ValueError as exc:
@@ -85,16 +95,122 @@ def set_mode(body: ModeUpdate, _: str = Auth, session: Session = DB) -> dict:
         from app.simulation.seed import seed_all
 
         seed_all(session, demo=True)
+    record_audit(session, account.username, "mode.switch", target=mode, request=request)
     return {"data_mode": mode}
 
 
 # --- Auth -----------------------------------------------------------------
 
+# Very small in-memory login throttle: max attempts per username per window.
+_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
+_LOGIN_MAX = 8
+_LOGIN_WINDOW = 300.0
+
+
+def _rate_limited(username: str) -> bool:
+    now = time.time()
+    hits = [t for t in _LOGIN_ATTEMPTS.get(username, []) if now - t < _LOGIN_WINDOW]
+    hits.append(now)
+    _LOGIN_ATTEMPTS[username] = hits
+    return len(hits) > _LOGIN_MAX
+
+
 @api_router.post("/auth/login", response_model=Token)
-def login(form: OAuth2PasswordRequestForm = Depends()) -> Token:
-    if not authenticate(form.username, form.password):
+def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), session: Session = DB) -> Token:
+    if _rate_limited(form.username):
+        raise HTTPException(status_code=429, detail="Too many login attempts, try again later")
+    account = session.exec(select(Account).where(Account.username == form.username)).first()
+    if account is None or not account.is_active or not verify_password(form.password, account.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
-    return Token(access_token=create_access_token(form.username))
+    account.last_login = utcnow()
+    session.add(account)
+    session.commit()
+    record_audit(session, account.username, "auth.login", request=request, org_id=account.org_id)
+    return Token(access_token=create_access_token(account.username, account.role, account.org_id))
+
+
+@api_router.get("/me")
+def me(account: Account = Account_) -> dict:
+    return {"username": account.username, "email": account.email, "role": account.role,
+            "org_id": account.org_id, "is_active": account.is_active}
+
+
+# --- Account management (admin only) --------------------------------------
+
+def _account_brief(a: Account) -> dict:
+    return {"id": a.id, "username": a.username, "email": a.email, "role": a.role,
+            "is_active": a.is_active, "last_login": a.last_login, "created_at": a.created_at}
+
+
+@api_router.get("/accounts")
+def list_accounts(account: Account = AdminOnly, session: Session = DB) -> list[dict]:
+    rows = session.exec(select(Account).order_by(Account.created_at)).all()
+    return [_account_brief(a) for a in rows]
+
+
+@api_router.post("/accounts")
+def create_account(body: AccountCreate, request: Request, account: Account = AdminOnly,
+                   session: Session = DB) -> dict:
+    if body.role not in ("admin", "analyst", "viewer"):
+        raise HTTPException(status_code=400, detail="invalid role")
+    if session.exec(select(Account).where(Account.username == body.username)).first():
+        raise HTTPException(status_code=409, detail="username already exists")
+    acc = Account(org_id=account.org_id, username=body.username, email=body.email, role=body.role,
+                  hashed_password=hash_password(body.password), is_active=True)
+    session.add(acc)
+    session.commit()
+    session.refresh(acc)
+    record_audit(session, account.username, "account.create", target=body.username,
+                 detail={"role": body.role}, request=request)
+    return _account_brief(acc)
+
+
+@api_router.put("/accounts/{account_id}")
+def update_account(account_id: int, body: AccountUpdate, request: Request,
+                   account: Account = AdminOnly, session: Session = DB) -> dict:
+    target = session.get(Account, account_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    if body.role is not None:
+        if body.role not in ("admin", "analyst", "viewer"):
+            raise HTTPException(status_code=400, detail="invalid role")
+        target.role = body.role
+    if body.email is not None:
+        target.email = body.email
+    if body.is_active is not None:
+        # Don't let an admin lock themselves out / disable the last admin.
+        if not body.is_active and target.id == account.id:
+            raise HTTPException(status_code=400, detail="cannot deactivate yourself")
+        target.is_active = body.is_active
+    if body.password:
+        target.hashed_password = hash_password(body.password)
+    session.add(target)
+    session.commit()
+    record_audit(session, account.username, "account.update", target=target.username, request=request)
+    return _account_brief(target)
+
+
+@api_router.delete("/accounts/{account_id}")
+def delete_account(account_id: int, request: Request, account: Account = AdminOnly,
+                   session: Session = DB) -> dict:
+    target = session.get(Account, account_id)
+    if target is None:
+        raise HTTPException(status_code=404, detail="account not found")
+    if target.id == account.id:
+        raise HTTPException(status_code=400, detail="cannot delete yourself")
+    session.delete(target)
+    session.commit()
+    record_audit(session, account.username, "account.delete", target=target.username, request=request)
+    return {"ok": True, "deleted": account_id}
+
+
+# --- Audit log (admin only) -----------------------------------------------
+
+@api_router.get("/audit")
+def list_audit(limit: int = 100, account: Account = AdminOnly, session: Session = DB) -> list[dict]:
+    rows = session.exec(select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit)).all()
+    return [{"id": r.id, "actor": r.actor, "action": r.action, "target": r.target,
+             "detail": r.detail, "ip": r.ip, "created_at": r.created_at} for r in rows]
 
 
 # --- Dashboard (F9) -------------------------------------------------------
@@ -136,8 +252,8 @@ def get_incident(incident_id: int, _: str = Auth, session: Session = DB) -> dict
 
 
 @api_router.post("/incidents/{incident_id}/status")
-def update_incident_status(incident_id: int, body: StatusUpdate,
-                           user: str = Auth, session: Session = DB) -> dict:
+def update_incident_status(incident_id: int, body: StatusUpdate, request: Request,
+                           account: Account = AnalystUp, session: Session = DB) -> dict:
     incident = session.get(Incident, incident_id)
     if incident is None:
         raise HTTPException(status_code=404, detail="incident not found")
@@ -151,6 +267,8 @@ def update_incident_status(incident_id: int, body: StatusUpdate,
     from app.scoring.engine import recompute_user_risk
 
     recompute_user_risk(session, incident.actor_username)
+    record_audit(session, account.username, "incident.status", target=str(incident_id),
+                 detail={"status": body.status}, request=request)
     return {"ok": True, "status": incident.status}
 
 
@@ -179,30 +297,38 @@ def list_actions(status: str | None = None, _: str = Auth, session: Session = DB
 
 
 @api_router.post("/actions")
-def request_action(body: ActionRequest, user: str = Auth, session: Session = DB) -> dict:
+def request_action(body: ActionRequest, request: Request, account: Account = AnalystUp,
+                   session: Session = DB) -> dict:
     try:
         action = response_actions.request_action(
-            session, body.action_type, body.target, body.incident_id, requested_by=user)
+            session, body.action_type, body.target, body.incident_id, requested_by=account.username)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc))
+    record_audit(session, account.username, "action.request",
+                 target=f"{body.action_type}:{body.target}", request=request)
     return action.model_dump()
 
 
 @api_router.post("/actions/{action_id}/approve")
-def approve_action(action_id: int, user: str = Auth, session: Session = DB) -> dict:
+def approve_action(action_id: int, request: Request, account: Account = AdminOnly,
+                   session: Session = DB) -> dict:
     try:
-        action = response_actions.approve_action(session, action_id, approved_by=user)
+        action = response_actions.approve_action(session, action_id, approved_by=account.username)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    record_audit(session, account.username, "action.approve",
+                 target=f"{action.action_type}:{action.target}", request=request)
     return action.model_dump()
 
 
 @api_router.post("/actions/{action_id}/reject")
-def reject_action(action_id: int, user: str = Auth, session: Session = DB) -> dict:
+def reject_action(action_id: int, request: Request, account: Account = AdminOnly,
+                  session: Session = DB) -> dict:
     try:
-        action = response_actions.reject_action(session, action_id, rejected_by=user)
+        action = response_actions.reject_action(session, action_id, rejected_by=account.username)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc))
+    record_audit(session, account.username, "action.reject", target=str(action_id), request=request)
     return action.model_dump()
 
 
@@ -236,7 +362,7 @@ def get_report(report_id: int, _: str = Auth, session: Session = DB) -> dict:
 
 
 @api_router.post("/reports/generate")
-def generate_report(_: str = Auth, session: Session = DB) -> dict:
+def generate_report(_: Account = AnalystUp, session: Session = DB) -> dict:
     from app.reporting.weekly import generate_weekly_report
 
     report = generate_weekly_report(session)
@@ -260,7 +386,7 @@ def get_detection(det_id: str, _: str = Auth, session: Session = DB) -> dict:
 
 
 @api_router.post("/detections")
-def create_detection(body: dict, _: str = Auth, session: Session = DB) -> dict:
+def create_detection(body: dict, _: Account = AdminOnly, session: Session = DB) -> dict:
     if not body.get("det_id"):
         raise HTTPException(status_code=400, detail="det_id is required")
     if session.exec(select(DetectionDefinition).where(DetectionDefinition.det_id == body["det_id"])).first():
@@ -273,7 +399,7 @@ def create_detection(body: dict, _: str = Auth, session: Session = DB) -> dict:
 
 
 @api_router.put("/detections/{det_id}")
-def update_detection(det_id: str, body: dict, _: str = Auth, session: Session = DB) -> dict:
+def update_detection(det_id: str, body: dict, _: Account = AdminOnly, session: Session = DB) -> dict:
     d = session.exec(select(DetectionDefinition).where(DetectionDefinition.det_id == det_id)).first()
     if d is None:
         raise HTTPException(status_code=404, detail="detection not found")
@@ -287,7 +413,7 @@ def update_detection(det_id: str, body: dict, _: str = Auth, session: Session = 
 
 
 @api_router.delete("/detections/{det_id}")
-def delete_detection(det_id: str, _: str = Auth, session: Session = DB) -> dict:
+def delete_detection(det_id: str, _: Account = AdminOnly, session: Session = DB) -> dict:
     d = session.exec(select(DetectionDefinition).where(DetectionDefinition.det_id == det_id)).first()
     if d is None:
         raise HTTPException(status_code=404, detail="detection not found")
@@ -310,7 +436,8 @@ def list_connections(_: str = Auth, session: Session = DB) -> list[dict]:
 
 
 @api_router.post("/connections")
-def create_connection(body: ConnectionCreate, _: str = Auth, session: Session = DB) -> dict:
+def create_connection(body: ConnectionCreate, request: Request, account: Account = AdminOnly,
+                      session: Session = DB) -> dict:
     if provider_meta(body.provider) is None:
         raise HTTPException(status_code=400, detail=f"unknown provider: {body.provider}")
     public, secrets = split_credentials(body.provider, body.credentials or {})
@@ -324,11 +451,14 @@ def create_connection(body: ConnectionCreate, _: str = Auth, session: Session = 
     session.add(conn)
     session.commit()
     session.refresh(conn)
+    record_audit(session, account.username, "connection.create",
+                 target=f"{body.provider}#{conn.id}", request=request)
     return _connection_brief(conn)
 
 
 @api_router.put("/connections/{conn_id}")
-def update_connection(conn_id: int, body: ConnectionUpdate, _: str = Auth, session: Session = DB) -> dict:
+def update_connection(conn_id: int, body: ConnectionUpdate, request: Request,
+                      account: Account = AdminOnly, session: Session = DB) -> dict:
     conn = session.get(Connection, conn_id)
     if conn is None:
         raise HTTPException(status_code=404, detail="connection not found")
@@ -347,11 +477,12 @@ def update_connection(conn_id: int, body: ConnectionUpdate, _: str = Auth, sessi
     session.add(conn)
     session.commit()
     session.refresh(conn)
+    record_audit(session, account.username, "connection.update", target=str(conn_id), request=request)
     return _connection_brief(conn)
 
 
 @api_router.post("/connections/{conn_id}/test")
-def test_conn(conn_id: int, _: str = Auth, session: Session = DB) -> dict:
+def test_conn(conn_id: int, request: Request, account: Account = AdminOnly, session: Session = DB) -> dict:
     conn = session.get(Connection, conn_id)
     if conn is None:
         raise HTTPException(status_code=404, detail="connection not found")
@@ -362,23 +493,27 @@ def test_conn(conn_id: int, _: str = Auth, session: Session = DB) -> dict:
         conn.last_sync = utcnow()
     session.add(conn)
     session.commit()
+    record_audit(session, account.username, "connection.test",
+                 target=f"{conn.provider}#{conn.id}", detail={"ok": ok}, request=request)
     return {"ok": ok, "message": message, "status": conn.status}
 
 
 @api_router.delete("/connections/{conn_id}")
-def delete_connection(conn_id: int, _: str = Auth, session: Session = DB) -> dict:
+def delete_connection(conn_id: int, request: Request, account: Account = AdminOnly,
+                      session: Session = DB) -> dict:
     conn = session.get(Connection, conn_id)
     if conn is None:
         raise HTTPException(status_code=404, detail="connection not found")
     session.delete(conn)
     session.commit()
+    record_audit(session, account.username, "connection.delete", target=str(conn_id), request=request)
     return {"ok": True, "deleted": conn_id}
 
 
-# --- Demo control ---------------------------------------------------------
+# --- Demo control (admin only) --------------------------------------------
 
 @api_router.post("/control/inject")
-def inject_scenario(body: InjectRequest, _: str = Auth, session: Session = DB) -> dict:
+def inject_scenario(body: InjectRequest, _: Account = AdminOnly, session: Session = DB) -> dict:
     from app.ingestion.pipeline import analyze, ingest_raw_events
     from app.simulation.scenarios import SCENARIOS, generate_scenario, random_scenario
 
@@ -393,7 +528,7 @@ def inject_scenario(body: InjectRequest, _: str = Auth, session: Session = DB) -
 
 
 @api_router.post("/control/cycle")
-def run_cycle(_: str = Auth, session: Session = DB) -> dict:
+def run_cycle(_: Account = AdminOnly, session: Session = DB) -> dict:
     from app.ingestion.pipeline import run_full_cycle
 
     if runtime.is_live():

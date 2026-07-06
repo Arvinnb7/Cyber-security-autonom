@@ -21,12 +21,21 @@ class Settings(BaseSettings):
     # Accepts either DATA_MODE or SENTINEL_DATA_MODE.
     data_mode: str = Field(default="demo", validation_alias=AliasChoices("DATA_MODE", "SENTINEL_DATA_MODE"))
 
-    # --- Auth (single-org MVP) ---
+    # --- Auth ---
     jwt_secret: str = "change-me-in-production-please"
     jwt_algorithm: str = "HS256"
     jwt_expire_minutes: int = 60 * 12
+    # Bootstrap admin: seeded (hashed) into the Account table on first boot only.
     admin_username: str = "admin"
     admin_password: str = "admin"
+
+    # Dedicated key for encrypting connector credentials at rest. Falls back to a
+    # value derived from jwt_secret if unset (with a warning) — set this in prod.
+    encryption_key: str | None = None
+
+    # --- Transport / hardening ---
+    # Comma-separated list of allowed browser origins for CORS.
+    cors_origins: str = "http://localhost:3000"
 
     # --- AI (Claude) ---
     anthropic_api_key: str | None = None
@@ -54,6 +63,25 @@ class Settings(BaseSettings):
     @property
     def ai_enabled(self) -> bool:
         return bool(self.anthropic_api_key)
+
+    @property
+    def is_production(self) -> bool:
+        return self.environment.strip().lower() in ("prod", "production")
+
+    @property
+    def cors_origin_list(self) -> list[str]:
+        return [o.strip() for o in self.cors_origins.split(",") if o.strip()]
+
+    def insecure_defaults(self) -> list[str]:
+        """Names of secrets still at their insecure built-in default."""
+        problems = []
+        if self.jwt_secret == "change-me-in-production-please":
+            problems.append("SENTINEL_JWT_SECRET")
+        if self.admin_password == "admin":
+            problems.append("SENTINEL_ADMIN_PASSWORD")
+        if not self.encryption_key:
+            problems.append("SENTINEL_ENCRYPTION_KEY")
+        return problems
 
     @property
     def is_demo(self) -> bool:

@@ -39,6 +39,20 @@ class ModeUpdate(BaseModel):
     data_mode: str  # "demo" | "live"
 
 
+class AccountCreate(BaseModel):
+    username: str
+    password: str
+    email: str = ""
+    role: str = "viewer"  # admin | analyst | viewer
+
+
+class AccountUpdate(BaseModel):
+    email: str | None = None
+    role: str | None = None
+    is_active: bool | None = None
+    password: str | None = None  # set to reset the password
+
+
 class ConnectionCreate(BaseModel):
     provider: str
     display_name: str = ""

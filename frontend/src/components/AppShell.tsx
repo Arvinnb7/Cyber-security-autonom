@@ -5,6 +5,7 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { api, clearToken, getToken } from "@/lib/api";
 import { useLang } from "@/lib/i18n";
+import { MeProvider, useMe } from "@/lib/me";
 
 const NAV = [
   { href: "/", key: "nav.dashboard", icon: "▤" },
@@ -19,10 +20,7 @@ const NAV = [
 export default function AppShell({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
-  const { t, lang, setLang } = useLang();
   const [ready, setReady] = useState(false);
-  const [mode, setMode] = useState<string | null>(null);
-  const [switching, setSwitching] = useState(false);
   const isLogin = pathname === "/login";
 
   useEffect(() => {
@@ -31,23 +29,40 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       return;
     }
     setReady(true);
-    if (!isLogin) api.getMode().then((m) => setMode(m.data_mode)).catch(() => {});
   }, [isLogin, pathname, router]);
+
+  if (isLogin) return <>{children}</>;
+  if (!ready) return null;
+
+  return (
+    <MeProvider>
+      <ShellBody>{children}</ShellBody>
+    </MeProvider>
+  );
+}
+
+function ShellBody({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  const router = useRouter();
+  const { t, lang, setLang } = useLang();
+  const { me, isAdmin } = useMe();
+  const [mode, setMode] = useState<string | null>(null);
+  const [switching, setSwitching] = useState(false);
+
+  useEffect(() => {
+    api.getMode().then((m) => setMode(m.data_mode)).catch(() => {});
+  }, []);
 
   async function toggleMode() {
     if (!mode || switching) return;
     setSwitching(true);
     try {
       await api.setMode(mode === "demo" ? "live" : "demo");
-      // Full reload so every page refetches the now-active dataset.
       window.location.reload();
     } catch {
       setSwitching(false);
     }
   }
-
-  if (isLogin) return <>{children}</>;
-  if (!ready) return null;
 
   return (
     <div className="flex min-h-screen">
@@ -71,8 +86,17 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
               </Link>
             );
           })}
+          {isAdmin && (
+            <Link
+              href="/settings/users"
+              className={`nav-link ${pathname.startsWith("/settings/users") ? "nav-link-active" : ""}`}
+            >
+              <span className="w-4 text-center opacity-70">◐</span> {t("nav.team")}
+            </Link>
+          )}
         </nav>
-        {mode && (
+
+        {isAdmin && mode && (
           <div className="mt-2 rounded-xl border border-ink-700/60 bg-ink-850/60 p-2.5">
             <div className="mb-1.5 flex items-center gap-2 px-1 text-xs">
               <span
@@ -86,8 +110,21 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
             </button>
           </div>
         )}
+
+        {me && (
+          <div className="mt-2 flex items-center gap-2 rounded-xl border border-ink-700/60 bg-ink-850/60 px-3 py-2">
+            <div className="grid h-7 w-7 place-items-center rounded-full bg-accent/15 text-xs text-accent-soft">
+              {me.username.slice(0, 2).toUpperCase()}
+            </div>
+            <div className="min-w-0">
+              <div className="truncate text-sm text-slate-200">{me.username}</div>
+              <div className="text-[10px] uppercase tracking-wide text-slate-500">{t(`role.${me.role}`)}</div>
+            </div>
+          </div>
+        )}
+
         <button
-          className="nav-link mt-2"
+          className="nav-link mt-1"
           onClick={() => setLang(lang === "fa" ? "en" : "fa")}
           title="Change language / تغییر زبان"
         >

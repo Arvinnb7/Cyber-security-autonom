@@ -6,9 +6,11 @@ import { useCallback, useEffect, useState } from "react";
 import { AiBadge, ApprovalPill, PageHeader, RiskPill, ScoreBar, SeverityPill, Spinner, StatusPill } from "@/components/ui";
 import { api, threatLabel } from "@/lib/api";
 import { detName, useLang } from "@/lib/i18n";
+import { useMe } from "@/lib/me";
 
 export default function IncidentDetail() {
   const { t, lang } = useLang();
+  const { isAdmin, isAnalystUp } = useMe();
   const { id } = useParams<{ id: string }>();
   const incidentId = Number(id);
   const [inc, setInc] = useState<any>(null);
@@ -163,39 +165,45 @@ export default function IncidentDetail() {
             </div>
           </div>
 
-          <div className="card">
-            <h2 className="mb-3 text-sm font-medium text-slate-300">{t("det.response")}</h2>
-            <div className="grid grid-cols-2 gap-2">
-              {actions.map((a) => (
-                <button
-                  key={a.type}
-                  className="btn"
-                  onClick={() => setConfirm({ type: a.type, label: t(`action.${a.type}`), target: defaultTarget })}
-                >
-                  {t(`action.${a.type}`)}
-                </button>
-              ))}
+          {(isAdmin || (inc.actions?.length > 0)) && (
+            <div className="card">
+              <h2 className="mb-3 text-sm font-medium text-slate-300">{t("det.response")}</h2>
+              {isAdmin && (
+                <div className="grid grid-cols-2 gap-2">
+                  {actions.map((a) => (
+                    <button
+                      key={a.type}
+                      className="btn"
+                      onClick={() => setConfirm({ type: a.type, label: t(`action.${a.type}`), target: defaultTarget })}
+                    >
+                      {t(`action.${a.type}`)}
+                    </button>
+                  ))}
+                </div>
+              )}
+              {inc.actions?.length > 0 && (
+                <div className={`space-y-1.5 text-xs ${isAdmin ? "mt-4 border-t border-ink-700 pt-3" : ""}`}>
+                  <div className="text-slate-500">{t("det.audit")}</div>
+                  {inc.actions.map((a: any) => (
+                    <div key={a.id} className="flex items-center justify-between">
+                      <span className="text-slate-300">{t(`action.${a.action_type}`)} → {a.target}</span>
+                      <StatusPill status={a.status} />
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
-            {inc.actions?.length > 0 && (
-              <div className="mt-4 space-y-1.5 border-t border-ink-700 pt-3 text-xs">
-                <div className="text-slate-500">{t("det.audit")}</div>
-                {inc.actions.map((a: any) => (
-                  <div key={a.id} className="flex items-center justify-between">
-                    <span className="text-slate-300">{t(`action.${a.action_type}`)} → {a.target}</span>
-                    <StatusPill status={a.status} />
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
+          )}
 
           <div className="card">
             <h2 className="mb-3 text-sm font-medium text-slate-300">{t("det.triage")}</h2>
-            <div className="flex flex-wrap gap-2">
-              <button className="btn" onClick={() => setStatus("investigating")}>{t("triage.investigating")}</button>
-              <button className="btn btn-accent" onClick={() => setStatus("resolved")}>{t("triage.resolve")}</button>
-              <button className="btn" onClick={() => setStatus("dismissed")}>{t("triage.dismiss")}</button>
-            </div>
+            {isAnalystUp && (
+              <div className="flex flex-wrap gap-2">
+                <button className="btn" onClick={() => setStatus("investigating")}>{t("triage.investigating")}</button>
+                <button className="btn btn-accent" onClick={() => setStatus("resolved")}>{t("triage.resolve")}</button>
+                <button className="btn" onClick={() => setStatus("dismissed")}>{t("triage.dismiss")}</button>
+              </div>
+            )}
             <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
               {t("det.currentStatus")} <StatusPill status={inc.status} />
             </div>

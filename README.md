@@ -113,6 +113,34 @@ Without a key everything still works via rule-based fallbacks — look for the
 
 ---
 
+## Users, roles & security
+
+Sentinel has real multi-user auth with **role-based access control**:
+
+| Role | Can do |
+|------|--------|
+| `viewer` | Read everything (dashboards, incidents, catalog, reports) |
+| `analyst` | + triage incidents, request response actions, run reports, chat |
+| `admin` | + approve/execute actions, manage integrations, switch data mode, manage the detection catalog and **users** |
+
+- Passwords are hashed (bcrypt); the bootstrap admin is seeded from
+  `SENTINEL_ADMIN_*` on first boot only — after that, manage accounts from the
+  **Team & Access** page (admin only).
+- Every sensitive action (login, mode switch, connection changes, response
+  actions, user changes) is written to an **audit log** (`GET /api/audit`, admin).
+- Connector credentials are encrypted at rest with a **dedicated key**
+  (`SENTINEL_ENCRYPTION_KEY`).
+
+### Production checklist
+Set these before exposing the app (in `production` the backend **refuses to boot**
+if any are still at their default):
+- `SENTINEL_ENVIRONMENT=production`
+- `SENTINEL_JWT_SECRET` — long random value
+- `SENTINEL_ADMIN_PASSWORD` — strong password (then rotate/replace the admin)
+- `SENTINEL_ENCRYPTION_KEY` — strong random value
+- `SENTINEL_CORS_ORIGINS` — your frontend origin(s), no wildcard
+- Terminate TLS at a reverse proxy in front of the app (HSTS is sent in production)
+
 ## Connecting your real security sources (live integrations)
 
 Open **Integrations** in the app to connect your organization's actual API:

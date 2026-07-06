@@ -30,6 +30,39 @@ const DICT: Record<string, { en: string; fa: string }> = {
   "nav.chat": { en: "Security Assistant", fa: "دستیار امنیتی" },
   "nav.integrations": { en: "Integrations", fa: "اتصال‌ها" },
   "nav.reports": { en: "Weekly Reports", fa: "گزارش‌های هفتگی" },
+  "nav.team": { en: "Team & Access", fa: "تیم و دسترسی" },
+
+  // roles
+  "role.admin": { en: "admin", fa: "مدیر" },
+  "role.analyst": { en: "analyst", fa: "تحلیلگر" },
+  "role.viewer": { en: "viewer", fa: "بیننده" },
+
+  // team / accounts management
+  "team.subtitle": {
+    en: "Manage who can access Sentinel and what they can do",
+    fa: "مدیریت اینکه چه کسی به Sentinel دسترسی دارد و چه کاری می‌تواند بکند",
+  },
+  "team.add": { en: "＋ Add user", fa: "＋ افزودن کاربر" },
+  "team.username": { en: "Username", fa: "نام کاربری" },
+  "team.password": { en: "Password", fa: "رمز عبور" },
+  "team.email": { en: "Email", fa: "ایمیل" },
+  "team.role": { en: "Role", fa: "نقش" },
+  "team.status": { en: "Status", fa: "وضعیت" },
+  "team.lastLogin": { en: "Last login", fa: "آخرین ورود" },
+  "team.active": { en: "active", fa: "فعال" },
+  "team.inactive": { en: "inactive", fa: "غیرفعال" },
+  "team.enable": { en: "Enable", fa: "فعال‌کردن" },
+  "team.disable": { en: "Disable", fa: "غیرفعال‌کردن" },
+  "team.delete": { en: "Delete", fa: "حذف" },
+  "team.resetPw": { en: "Reset password", fa: "ریست رمز" },
+  "team.save": { en: "Create user", fa: "ساخت کاربر" },
+  "team.saving": { en: "Saving…", fa: "در حال ذخیره…" },
+  "team.cancel": { en: "Cancel", fa: "انصراف" },
+  "team.never": { en: "never", fa: "هرگز" },
+  "team.you": { en: "you", fa: "شما" },
+  "team.roleAdminDesc": { en: "Full control", fa: "کنترل کامل" },
+  "team.roleAnalystDesc": { en: "Triage & respond", fa: "تریاژ و واکنش" },
+  "team.roleViewerDesc": { en: "Read-only", fa: "فقط خواندن" },
 
   // integrations
   "int.subtitle": {

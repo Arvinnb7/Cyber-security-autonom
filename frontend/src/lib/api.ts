@@ -89,6 +89,14 @@ export const api = {
   getMode: () => request<{ data_mode: string }>("/mode"),
   setMode: (data_mode: string) =>
     request<{ data_mode: string }>("/mode", { method: "POST", body: JSON.stringify({ data_mode }) }),
+  me: () => request<{ username: string; email: string; role: string; org_id: number }>("/me"),
+  accounts: () => request<any[]>("/accounts"),
+  createAccount: (username: string, password: string, role: string, email = "") =>
+    request<any>("/accounts", { method: "POST", body: JSON.stringify({ username, password, role, email }) }),
+  updateAccount: (id: number, body: any) =>
+    request<any>(`/accounts/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  deleteAccount: (id: number) => request<any>(`/accounts/${id}`, { method: "DELETE" }),
+  audit: (limit = 100) => request<any[]>(`/audit?limit=${limit}`),
 };
 
 export function riskColor(score: number): string {
