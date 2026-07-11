@@ -113,6 +113,29 @@ Without a key everything still works via rule-based fallbacks — look for the
 
 ---
 
+## Detection coverage on real data (honest status)
+
+Detection is judged against a **per-organization behavioural baseline** learned
+from each user's real history (home countries, devices, usual hours) — not
+hardcoded assumptions — so it works for any org in any country. Which of the 10
+catalog detections actually fire depends on which real telemetry a connector
+provides:
+
+| Detection | Works on real data today | Source needed |
+|-----------|--------------------------|---------------|
+| DET-001 Suspicious Login | ✅ (M365 sign-ins + baseline) | Microsoft 365 |
+| DET-002 Account Compromise | ✅ (sign-ins + MFA/password audit + file activity) | Microsoft 365 |
+| DET-007 Privilege Abuse | ⚠️ partial (directory audit) | Microsoft 365 |
+| DET-003 Phishing | ⚠️ needs mail-security signal | Defender for O365 (Phase 4) |
+| DET-006 Data Exfiltration | ⚠️ partial (file download; upload signal missing) | + network/DLP (Phase 4) |
+| DET-004 Malware / DET-005 Ransomware | ❌ needs EDR telemetry | CrowdStrike/SentinelOne (Phase 4) |
+| DET-008/009/010 | ⚠️ partial / source-dependent | varies |
+
+Live-mode ingestion auto-provisions users & assets from real events so risk
+scoring has real subjects. **Note:** the Office 365 file/email activity feed
+(Management Activity API) is implemented but must be validated against a real
+tenant during a pilot; EDR-driven detections require the Phase-4 connectors.
+
 ## Real response actions (not a demo)
 
 When an incident fires, an admin can execute a **real** containment action against

@@ -15,8 +15,8 @@ from typing import Any
 PROVIDERS: dict[str, dict[str, Any]] = {
     "microsoft_365": {
         "label": "Microsoft 365 / Azure AD",
-        "doc": "Azure AD app registration with AuditLog.Read.All (application) permission. "
-               "For response actions also grant User.ReadWrite.All.",
+        "doc": "Azure AD app with AuditLog.Read.All (sign-ins/audit) and ActivityFeed.Read "
+               "(file/email activity). For response actions also grant User.ReadWrite.All.",
         "implemented": True,
         "actions": ["block_user", "kill_session", "reset_password"],
         "fields": [

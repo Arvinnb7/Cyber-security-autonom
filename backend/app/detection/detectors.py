@@ -14,6 +14,7 @@ from sqlmodel import Session, select
 
 from app.core import runtime
 from app.core.time import utcnow
+from app.detection.baseline import Baselines
 from app.detection.catalog import get_definition
 from app.models.tables import Event, Signal
 from app.simulation.org import GEO, is_privileged
@@ -113,19 +114,22 @@ def make_signal(det_id: str, factor_keys: set[str], *, actor: str | None, asset:
 
 # --- DET-001 Suspicious Login --------------------------------------------
 
-def det_suspicious_login(events: list[Event]) -> list[Signal]:
+def det_suspicious_login(events: list[Event], baselines: Baselines) -> list[Signal]:
     out: list[Signal] = []
     for user, evs in _by_user(events).items():
         logins = [e for e in evs if e.action == "login_success" and e.country]
         if not logins:
             continue
+        bl = baselines.for_user(user)
         keys: set[str] = set()
-        home = next((e.raw.get("home") for e in logins if e.raw.get("home")), "IR")
-        if any(e.country != home for e in logins):
+        # New country: judged against the user's LEARNED home countries (works for
+        # any org, any country) — no hardcoded assumption.
+        if any(bl.is_new_country(e.country) for e in logins):
             keys.add("new_country")
-        if _flag(evs, "login_success", "new_device"):
+        # New device / unusual time: from the source's own hint OR the baseline.
+        if _flag(evs, "login_success", "new_device") or any(bl.is_new_device(e.raw.get("device_id")) for e in logins):
             keys.add("new_device")
-        if _flag(evs, "login_success", "off_hours"):
+        if _flag(evs, "login_success", "off_hours") or any(bl.is_unusual_time(e.timestamp) for e in logins):
             keys.add("unusual_time")
         if _flag(evs, "login_success", "risky_ip") or _flag(evs, "login_failed", "risky_ip"):
             keys.add("risky_ip")
@@ -148,11 +152,12 @@ def det_suspicious_login(events: list[Event]) -> list[Signal]:
 
 # --- DET-002 Account Compromise ------------------------------------------
 
-def det_account_compromise(events: list[Event]) -> list[Signal]:
+def det_account_compromise(events: list[Event], baselines: Baselines) -> list[Signal]:
     out: list[Signal] = []
     for user, evs in _by_user(events).items():
+        bl = baselines.for_user(user)
         keys: set[str] = set()
-        foreign_login = any(e.action == "login_success" and e.country not in (None, "IR") for e in evs)
+        foreign_login = any(e.action == "login_success" and bl.is_new_country(e.country) for e in evs)
         if foreign_login and (_has(evs, "password_changed") or _has(evs, "mfa_disabled")):
             keys.add("suspicious_login_before_change")
         if _has(evs, "mfa_disabled"):
@@ -178,7 +183,7 @@ def det_account_compromise(events: list[Event]) -> list[Signal]:
 
 # --- DET-003 Phishing -----------------------------------------------------
 
-def det_phishing(events: list[Event]) -> list[Signal]:
+def det_phishing(events: list[Event], baselines: Baselines) -> list[Signal]:
     out: list[Signal] = []
     mails = [e for e in events if e.action == "email_received"]
     by_campaign: dict[str, list[Event]] = defaultdict(list)
@@ -209,7 +214,7 @@ def det_phishing(events: list[Event]) -> list[Signal]:
 
 # --- DET-004 Malware Execution -------------------------------------------
 
-def det_malware_execution(events: list[Event]) -> list[Signal]:
+def det_malware_execution(events: list[Event], baselines: Baselines) -> list[Signal]:
     out: list[Signal] = []
     for asset, evs in _by_asset(events).items():
         keys: set[str] = set()
@@ -239,7 +244,7 @@ def det_malware_execution(events: list[Event]) -> list[Signal]:
 
 # --- DET-005 Ransomware ---------------------------------------------------
 
-def det_ransomware(events: list[Event]) -> list[Signal]:
+def det_ransomware(events: list[Event], baselines: Baselines) -> list[Signal]:
     out: list[Signal] = []
     for asset, evs in _by_asset(events).items():
         renames = _count(evs, "file_rename")
@@ -269,7 +274,7 @@ def det_ransomware(events: list[Event]) -> list[Signal]:
 
 # --- DET-006 Data Exfiltration -------------------------------------------
 
-def det_data_exfiltration(events: list[Event]) -> list[Signal]:
+def det_data_exfiltration(events: list[Event], baselines: Baselines) -> list[Signal]:
     out: list[Signal] = []
     for user, evs in _by_user(events).items():
         keys: set[str] = set()
@@ -298,7 +303,7 @@ def det_data_exfiltration(events: list[Event]) -> list[Signal]:
 
 # --- DET-007 Privilege Abuse ---------------------------------------------
 
-def det_privilege_abuse(events: list[Event]) -> list[Signal]:
+def det_privilege_abuse(events: list[Event], baselines: Baselines) -> list[Signal]:
     out: list[Signal] = []
     for user, evs in _by_user(events).items():
         keys: set[str] = set()
@@ -338,7 +343,7 @@ _CONFIG_FACTOR = {
 }
 
 
-def det_security_config_change(events: list[Event]) -> list[Signal]:
+def det_security_config_change(events: list[Event], baselines: Baselines) -> list[Signal]:
     out: list[Signal] = []
     for asset, evs in _by_asset(events).items():
         changes = [e for e in evs if e.action == "config_change"]
@@ -359,7 +364,7 @@ def det_security_config_change(events: list[Event]) -> list[Signal]:
 
 # --- DET-009 Lateral Movement --------------------------------------------
 
-def det_lateral_movement(events: list[Event]) -> list[Signal]:
+def det_lateral_movement(events: list[Event], baselines: Baselines) -> list[Signal]:
     out: list[Signal] = []
     for user, evs in _by_user(events).items():
         remote_logins = [e for e in evs if e.action == "remote_login"]
@@ -388,7 +393,7 @@ def det_lateral_movement(events: list[Event]) -> list[Signal]:
 
 # --- DET-010 Privilege Escalation ----------------------------------------
 
-def det_privilege_escalation(events: list[Event]) -> list[Signal]:
+def det_privilege_escalation(events: list[Event], baselines: Baselines) -> list[Signal]:
     out: list[Signal] = []
     for user, evs in _by_user(events).items():
         keys: set[str] = set()
@@ -438,9 +443,10 @@ def _signal_fingerprint(s: Signal) -> str:
 def run_detectors(session: Session) -> list[Signal]:
     """Run all detectors over recent events, skipping already-known signals."""
     events = _recent_events(session)
+    baselines = Baselines(session, runtime.current_mode())
     candidates: list[Signal] = []
     for det in DETECTORS:
-        candidates.extend(det(events))
+        candidates.extend(det(events, baselines))
 
     existing = session.exec(select(Signal).where(
         Signal.created_at >= utcnow() - timedelta(minutes=WINDOW_MINUTES * 2)

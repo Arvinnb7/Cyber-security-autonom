@@ -8,7 +8,7 @@ from __future__ import annotations
 import logging
 import random
 
-from sqlmodel import Session
+from sqlmodel import Session, select
 
 from app.connectors.base import RawEvent
 from app.connectors.real.factory import poll_enabled_connections
@@ -19,9 +19,24 @@ from app.detection.correlation import correlate_and_score
 from app.detection.detectors import run_detectors
 from app.ingestion.dedup import is_duplicate
 from app.ingestion.normalizer import normalize
+from app.models.tables import Asset, User
 from app.simulation.scenarios import random_scenario
 
 logger = logging.getLogger("sentinel.pipeline")
+
+
+def _provision_identities(session: Session, raw_events: list[RawEvent], mode: str) -> None:
+    """Auto-create User/Asset rows from real events so scoring has subjects to
+    score in live mode (demo seeds its own). Idempotent."""
+    usernames = {r.actor_username for r in raw_events if r.actor_username}
+    assets = {r.target_asset for r in raw_events if r.target_asset}
+    for uname in usernames:
+        if session.exec(select(User).where(User.username == uname)).first() is None:
+            session.add(User(username=uname, display_name=uname, email=uname, origin=mode))
+    for aname in assets:
+        if session.exec(select(Asset).where(Asset.name == aname)).first() is None:
+            session.add(Asset(name=aname, asset_type="saas", sensitivity=3, origin=mode))
+    session.commit()
 
 
 def ingest_raw_events(session: Session, raw_events: list[RawEvent]) -> int:
@@ -36,6 +51,9 @@ def ingest_raw_events(session: Session, raw_events: list[RawEvent]) -> int:
         session.add(event)
         inserted += 1
     session.commit()
+    # In live mode, learn the org's users/assets from their real activity.
+    if mode == "live" and raw_events:
+        _provision_identities(session, raw_events, mode)
     return inserted
 
 

@@ -7,6 +7,7 @@ detection engine works on real tenant data.
 """
 from __future__ import annotations
 
+import logging
 import secrets as _secrets
 from datetime import datetime, timezone
 
@@ -15,9 +16,28 @@ import httpx
 from app.connectors.base import ActionResult, RawEvent
 from app.connectors.real.base import ConnectorError, RealConnector
 
+logger = logging.getLogger("sentinel.connectors.m365")
+
 GRAPH = "https://graph.microsoft.com/v1.0"
+MANAGE = "https://manage.office.com/api/v1.0"
 LOGIN = "https://login.microsoftonline.com"
 TIMEOUT = 20.0
+
+# Office 365 audit "Operation" -> canonical action the detectors understand.
+_SP_OPS = {
+    "FileDownloaded": "file_download",
+    "FileUploaded": "file_upload",
+    "FileRenamed": "file_rename",
+    "FileModified": "file_rename",
+    "FileAccessed": "file_open",
+    "FileDeleted": "file_rename",
+}
+_EXO_OPS = {
+    "Send": "email_send",
+    "SendAs": "email_send",
+    "SendOnBehalf": "email_send",
+    "MailItemsAccessed": "email_received",
+}
 
 
 def _graph_time(cursor: str | None) -> str | None:
@@ -40,7 +60,7 @@ class Microsoft365Connector(RealConnector):
     provider = "microsoft_365"
     supported_actions = ("block_user", "kill_session", "reset_password")
 
-    def _token(self) -> str:
+    def _token(self, scope: str = "https://graph.microsoft.com/.default") -> str:
         tenant = self.config.get("tenant_id")
         client_id = self.config.get("client_id")
         secret = self.secrets.get("client_secret")
@@ -52,7 +72,7 @@ class Microsoft365Connector(RealConnector):
                 data={
                     "client_id": client_id,
                     "client_secret": secret,
-                    "scope": "https://graph.microsoft.com/.default",
+                    "scope": scope,
                     "grant_type": "client_credentials",
                 },
                 timeout=TIMEOUT,
@@ -91,6 +111,14 @@ class Microsoft365Connector(RealConnector):
         events: list[RawEvent] = []
         events.extend(self._signins(token, since))
         events.extend(self._directory_audits(token, since))
+        # File/email activity (Office 365 Management Activity API). Resilient: if the
+        # app lacks ActivityFeed.Read or audit isn't enabled, sign-in detection still
+        # works — we just skip activity this cycle.
+        if self.config.get("pull_activity", True):
+            try:
+                events.extend(self._management_activity())
+            except ConnectorError as exc:
+                logger.info("m365 activity feed unavailable: %s", exc)
         return events
 
     def _signins(self, token: str, since: str | None = None) -> list[RawEvent]:
@@ -155,6 +183,65 @@ class Microsoft365Connector(RealConnector):
                 raw=raw_extra,
             ))
         return out
+
+    # --- file/email activity (Office 365 Management Activity API) ----------
+    # Needs application permission ActivityFeed.Read and unified audit logging
+    # enabled in the tenant. Validated end-to-end against a real tenant.
+
+    def _mgmt_request(self, token: str, method: str, url: str) -> httpx.Response:
+        try:
+            return httpx.request(method, url, headers={"Authorization": f"Bearer {token}"}, timeout=TIMEOUT)
+        except httpx.HTTPError as exc:
+            raise ConnectorError(f"Management API request failed: {exc}") from exc
+
+    def _management_activity(self, max_blobs: int = 5) -> list[RawEvent]:
+        tenant = self.config.get("tenant_id")
+        token = self._token("https://manage.office.com/.default")
+        out: list[RawEvent] = []
+        for content_type, mapper in (("Audit.SharePoint", self._map_sharepoint),
+                                     ("Audit.Exchange", self._map_exchange)):
+            base = f"{MANAGE}/{tenant}/activity/feed"
+            # Idempotently ensure the subscription is started (ignore "already enabled").
+            self._mgmt_request(token, "POST", f"{base}/subscriptions/start?contentType={content_type}")
+            listing = self._mgmt_request(token, "GET", f"{base}/subscriptions/content?contentType={content_type}")
+            if listing.status_code == 403:
+                raise ConnectorError("Access denied — grant ActivityFeed.Read (application) for file/email activity.")
+            if listing.status_code != 200:
+                continue
+            for blob in (listing.json() or [])[:max_blobs]:
+                uri = blob.get("contentUri")
+                if not uri:
+                    continue
+                content = self._mgmt_request(token, "GET", uri)
+                if content.status_code != 200:
+                    continue
+                for record in content.json() or []:
+                    ev = mapper(record)
+                    if ev:
+                        out.append(ev)
+        return out
+
+    def _map_sharepoint(self, r: dict) -> RawEvent | None:
+        action = _SP_OPS.get(r.get("Operation"))
+        if not action:
+            return None
+        return RawEvent(
+            source=self.provider, timestamp=_parse_ts(r.get("CreationTime")), category="file",
+            action=action, actor_username=r.get("UserId"), src_ip=r.get("ClientIP"),
+            target_asset=r.get("Workload") or "sharepoint", severity=2,
+            raw={"file": r.get("SourceFileName"), "object": r.get("ObjectId"), "op": r.get("Operation")},
+        )
+
+    def _map_exchange(self, r: dict) -> RawEvent | None:
+        action = _EXO_OPS.get(r.get("Operation"))
+        if not action:
+            return None
+        return RawEvent(
+            source=self.provider, timestamp=_parse_ts(r.get("CreationTime")), category="email",
+            action=action, actor_username=r.get("UserId"), src_ip=r.get("ClientIP"),
+            target_asset="exchange-online", severity=2,
+            raw={"op": r.get("Operation")},
+        )
 
     # --- real response actions (Microsoft Graph) --------------------------
 
