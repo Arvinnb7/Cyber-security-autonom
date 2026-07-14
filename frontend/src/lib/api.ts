@@ -80,6 +80,15 @@ export const api = {
     request<any>(`/connections/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   testConnection: (id: number) => request<any>(`/connections/${id}/test`, { method: "POST" }),
   deleteConnection: (id: number) => request<any>(`/connections/${id}`, { method: "DELETE" }),
+  notificationKinds: () => request<any[]>("/notification-kinds"),
+  channels: () => request<any[]>("/notification-channels"),
+  createChannel: (body: any) =>
+    request<any>("/notification-channels", { method: "POST", body: JSON.stringify(body) }),
+  updateChannel: (id: number, body: any) =>
+    request<any>(`/notification-channels/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  testChannel: (id: number) => request<any>(`/notification-channels/${id}/test`, { method: "POST" }),
+  deleteChannel: (id: number) => request<any>(`/notification-channels/${id}`, { method: "DELETE" }),
+  notifications: (limit = 50) => request<any[]>(`/notifications?limit=${limit}`),
   reports: () => request<any[]>("/reports"),
   report: (id: number) => request<any>(`/reports/${id}`),
   generateReport: () => request<any>("/reports/generate", { method: "POST" }),

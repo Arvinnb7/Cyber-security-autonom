@@ -11,6 +11,7 @@ from app.core import runtime
 from app.core.time import utcnow
 from app.detection.catalog import get_definition, severity_for_score
 from app.models.tables import Event, Incident, Signal
+from app.notifications.service import notify_incident
 from app.scoring.engine import recompute_asset_risk, recompute_user_risk, score_incident
 
 CORRELATE_WINDOW_MINUTES = 180
@@ -136,6 +137,10 @@ def correlate_and_score(session: Session, fresh_signals: list[Signal]) -> list[I
 
         recompute_user_risk(session, username)
         recompute_asset_risk(session, asset_name)
+
+        # Operational alerting: notify the org's channels (severity-gated, deduped,
+        # resilient — never breaks the pipeline).
+        notify_incident(session, incident, created=created)
         touched.append(incident)
 
     return touched

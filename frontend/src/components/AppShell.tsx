@@ -88,6 +88,14 @@ function ShellBody({ children }: { children: React.ReactNode }) {
           })}
           {isAdmin && (
             <Link
+              href="/settings/notifications"
+              className={`nav-link ${pathname.startsWith("/settings/notifications") ? "nav-link-active" : ""}`}
+            >
+              <span className="w-4 text-center opacity-70">◔</span> {t("nav.alerts")}
+            </Link>
+          )}
+          {isAdmin && (
+            <Link
               href="/settings/users"
               className={`nav-link ${pathname.startsWith("/settings/users") ? "nav-link-active" : ""}`}
             >

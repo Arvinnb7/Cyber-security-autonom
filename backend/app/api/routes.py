@@ -23,6 +23,8 @@ from app.models.schemas import (
     AccountCreate,
     AccountUpdate,
     ActionRequest,
+    ChannelCreate,
+    ChannelUpdate,
     ChatRequest,
     ChatResponse,
     ConnectionCreate,
@@ -40,10 +42,19 @@ from app.models.tables import (
     Connection,
     DetectionDefinition,
     Incident,
+    Notification,
+    NotificationChannel,
     Signal,
     User,
     WeeklyReport,
 )
+from app.notifications.registry import (
+    channel_meta,
+    public_channels,
+    secret_keys as channel_secret_keys,
+    split_credentials as channel_split_credentials,
+)
+from app.notifications.service import send_test as send_test_notification
 from app.response import actions as response_actions
 from app.services import analytics
 
@@ -529,6 +540,119 @@ def delete_connection(conn_id: int, request: Request, account: Account = AdminOn
     return {"ok": True, "deleted": conn_id}
 
 
+# --- Alerting / notification channels (operational alerting) --------------
+
+_SEVERITIES = {"low", "medium", "high", "critical"}
+
+
+@api_router.get("/notification-kinds")
+def list_notification_kinds(_: str = Auth) -> list[dict]:
+    return public_channels()
+
+
+@api_router.get("/notification-channels")
+def list_channels(_: Account = AdminOnly, session: Session = DB) -> list[dict]:
+    rows = session.exec(select(NotificationChannel).order_by(NotificationChannel.created_at.desc())).all()
+    return [_channel_brief(c) for c in rows]
+
+
+@api_router.post("/notification-channels")
+def create_channel(body: ChannelCreate, request: Request, account: Account = AdminOnly,
+                   session: Session = DB) -> dict:
+    meta = channel_meta(body.kind)
+    if meta is None:
+        raise HTTPException(status_code=400, detail=f"unknown channel kind: {body.kind}")
+    if body.min_severity not in _SEVERITIES:
+        raise HTTPException(status_code=400, detail=f"invalid min_severity: {body.min_severity}")
+    public, secrets = channel_split_credentials(body.kind, body.credentials or {})
+    channel = NotificationChannel(
+        kind=body.kind,
+        display_name=body.display_name or meta["label"],
+        enabled=body.enabled,
+        min_severity=body.min_severity,
+        notify_on_incident=body.notify_on_incident,
+        notify_on_approval=body.notify_on_approval,
+        config=public,
+        secrets_enc=encrypt_dict(secrets),
+    )
+    session.add(channel)
+    session.commit()
+    session.refresh(channel)
+    record_audit(session, account.username, "notification_channel.create",
+                 target=f"{body.kind}#{channel.id}", request=request)
+    return _channel_brief(channel)
+
+
+@api_router.put("/notification-channels/{channel_id}")
+def update_channel(channel_id: int, body: ChannelUpdate, request: Request,
+                   account: Account = AdminOnly, session: Session = DB) -> dict:
+    channel = session.get(NotificationChannel, channel_id)
+    if channel is None:
+        raise HTTPException(status_code=404, detail="channel not found")
+    if body.display_name is not None:
+        channel.display_name = body.display_name
+    if body.enabled is not None:
+        channel.enabled = body.enabled
+    if body.min_severity is not None:
+        if body.min_severity not in _SEVERITIES:
+            raise HTTPException(status_code=400, detail=f"invalid min_severity: {body.min_severity}")
+        channel.min_severity = body.min_severity
+    if body.notify_on_incident is not None:
+        channel.notify_on_incident = body.notify_on_incident
+    if body.notify_on_approval is not None:
+        channel.notify_on_approval = body.notify_on_approval
+    if body.credentials:
+        public, secrets = channel_split_credentials(channel.kind, body.credentials)
+        channel.config = {**channel.config, **public}
+        if secrets:  # only overwrite secrets that were actually provided
+            current = decrypt_dict(channel.secrets_enc)
+            current.update(secrets)
+            channel.secrets_enc = encrypt_dict(current)
+    channel.updated_at = utcnow()
+    session.add(channel)
+    session.commit()
+    session.refresh(channel)
+    record_audit(session, account.username, "notification_channel.update",
+                 target=str(channel_id), request=request)
+    return _channel_brief(channel)
+
+
+@api_router.post("/notification-channels/{channel_id}/test")
+def test_channel(channel_id: int, request: Request, account: Account = AdminOnly,
+                 session: Session = DB) -> dict:
+    channel = session.get(NotificationChannel, channel_id)
+    if channel is None:
+        raise HTTPException(status_code=404, detail="channel not found")
+    ok, message = send_test_notification(session, channel)
+    record_audit(session, account.username, "notification_channel.test",
+                 target=f"{channel.kind}#{channel.id}", detail={"ok": ok}, request=request)
+    return {"ok": ok, "message": message, "status": channel.status}
+
+
+@api_router.delete("/notification-channels/{channel_id}")
+def delete_channel(channel_id: int, request: Request, account: Account = AdminOnly,
+                   session: Session = DB) -> dict:
+    channel = session.get(NotificationChannel, channel_id)
+    if channel is None:
+        raise HTTPException(status_code=404, detail="channel not found")
+    session.delete(channel)
+    session.commit()
+    record_audit(session, account.username, "notification_channel.delete",
+                 target=str(channel_id), request=request)
+    return {"ok": True, "deleted": channel_id}
+
+
+@api_router.get("/notifications")
+def list_notifications(limit: int = 50, _: Account = AnalystUp, session: Session = DB) -> list[dict]:
+    rows = session.exec(
+        select(Notification)
+        .where(Notification.origin == runtime.current_mode())
+        .order_by(Notification.created_at.desc())
+        .limit(limit)
+    ).all()
+    return [_notification_brief(n) for n in rows]
+
+
 # --- Demo control (admin only) --------------------------------------------
 
 @api_router.post("/control/inject")
@@ -604,4 +728,27 @@ def _connection_brief(c: Connection) -> dict:
         "config": c.config, "secrets_set": set_secrets,
         "required_secrets": sorted(secret_keys(c.provider)),
         "supported_actions": meta.get("actions", []),
+    }
+
+
+def _channel_brief(c: NotificationChannel) -> dict:
+    # Never return raw secrets — only which secret fields are set.
+    set_secrets = sorted(decrypt_dict(c.secrets_enc).keys())
+    meta = channel_meta(c.kind) or {}
+    return {
+        "id": c.id, "kind": c.kind, "display_name": c.display_name, "enabled": c.enabled,
+        "min_severity": c.min_severity, "notify_on_incident": c.notify_on_incident,
+        "notify_on_approval": c.notify_on_approval, "status": c.status,
+        "last_error": c.last_error, "last_sent": c.last_sent,
+        "config": c.config, "secrets_set": set_secrets,
+        "required_secrets": sorted(channel_secret_keys(c.kind)),
+        "fields": meta.get("fields", []),
+    }
+
+
+def _notification_brief(n: Notification) -> dict:
+    return {
+        "id": n.id, "kind": n.kind, "severity": n.severity, "subject": n.subject,
+        "status": n.status, "detail": n.detail, "channel_id": n.channel_id,
+        "incident_id": n.incident_id, "created_at": n.created_at,
     }

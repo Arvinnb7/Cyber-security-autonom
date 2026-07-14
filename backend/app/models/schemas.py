@@ -66,3 +66,22 @@ class ConnectionUpdate(BaseModel):
     enabled: bool | None = None
     allow_actions: bool | None = None
     credentials: dict[str, Any] | None = None
+
+
+class ChannelCreate(BaseModel):
+    kind: str  # "email" | "teams" | "slack"
+    display_name: str = ""
+    enabled: bool = True
+    min_severity: str = "high"  # low | medium | high | critical
+    notify_on_incident: bool = True
+    notify_on_approval: bool = True
+    credentials: dict[str, Any] = {}
+
+
+class ChannelUpdate(BaseModel):
+    display_name: str | None = None
+    enabled: bool | None = None
+    min_severity: str | None = None
+    notify_on_incident: bool | None = None
+    notify_on_approval: bool | None = None
+    credentials: dict[str, Any] | None = None

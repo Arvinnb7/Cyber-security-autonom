@@ -14,6 +14,16 @@ class Settings(BaseSettings):
     app_name: str = "Sentinel"
     environment: str = "dev"
     database_url: str = "sqlite:///./sentinel.db"
+    # Public base URL of the frontend, used to build deep links to incidents in
+    # outbound alerts (email/Teams/Slack).
+    app_base_url: str = "http://localhost:3000"
+
+    # --- Alerting (F: operational notifications) ---
+    # Master switch. Channels are opt-in (configured in the DB) — nothing is sent
+    # until an admin adds a channel, so demo mode is never spammed.
+    notifications_enabled: bool = True
+    # Re-notify a still-pending manager approval after this many minutes (escalation).
+    approval_escalation_minutes: int = 30
 
     # --- Data mode -----------------------------------------------------------
     # "demo" => seed demo org + attack scenarios and run the simulators.

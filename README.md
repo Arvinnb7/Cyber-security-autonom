@@ -150,6 +150,27 @@ the connected source — not a simulated one:
   recorded as `blocked by policy`. Manager approval + full audit still apply.
 - In **demo mode** actions are always safely simulated.
 
+## Alerting & escalation (operational)
+
+Detection only matters if a human hears about it. When a high-severity incident
+fires — or a response action is waiting on manager approval — Sentinel pushes an
+alert to your team's channels:
+
+- **Channels:** Email (SMTP), Microsoft Teams and Slack (incoming webhooks). Add
+  them on the **Alerting** page (admin only). A generic webhook / PagerDuty
+  connector is a drop-in for later.
+- **Severity-gated:** each channel has a minimum severity, so low-severity noise
+  doesn't page the on-call.
+- **Deduped, with escalation:** an incident re-touched every ingest cycle is
+  alerted once; a *severity increase* re-alerts (escalation). A scheduler job
+  re-alerts still-pending manager approvals (default: every 10 min, after a
+  30-min grace) until they're actioned.
+- **Auditable:** every delivery (sent / failed / skipped) is recorded and shown
+  in the Alerting feed. Channel secrets (SMTP password, webhook URLs) are
+  encrypted at rest (Fernet) and never returned by the API.
+- **Opt-in & safe in demo:** no channels exist until an admin adds one, so demo
+  mode never alerts anyone by accident.
+
 ## Production deployment
 
 - **Database:** PostgreSQL in production (SQLite for dev). Schema is managed by

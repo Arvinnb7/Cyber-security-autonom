@@ -31,6 +31,7 @@ const DICT: Record<string, { en: string; fa: string }> = {
   "nav.integrations": { en: "Integrations", fa: "اتصال‌ها" },
   "nav.reports": { en: "Weekly Reports", fa: "گزارش‌های هفتگی" },
   "nav.team": { en: "Team & Access", fa: "تیم و دسترسی" },
+  "nav.alerts": { en: "Alerting", fa: "اعلان‌ها" },
 
   // roles
   "role.admin": { en: "admin", fa: "مدیر" },
@@ -279,6 +280,43 @@ const DICT: Record<string, { en: string; fa: string }> = {
     en: "When on, approved response actions really execute against this source.",
     fa: "وقتی روشن باشد، اکشن‌های تأییدشده واقعاً روی این سرویس اجرا می‌شوند.",
   },
+
+  // alerting / notification channels
+  "alerts.subtitle": {
+    en: "Deliver security alerts to your team — email, Teams or Slack — when incidents fire or an action needs approval",
+    fa: "اعلان‌های امنیتی را به تیمت برسان — ایمیل، Teams یا Slack — وقتی رخداد رخ می‌دهد یا اقدامی نیاز به تأیید دارد",
+  },
+  "alerts.add": { en: "＋ Add channel", fa: "＋ افزودن کانال" },
+  "alerts.none": {
+    en: "No channels yet. Add one so your team gets alerted.",
+    fa: "هنوز کانالی نیست. یکی اضافه کن تا تیمت خبردار شود.",
+  },
+  "alerts.kind": { en: "Channel type", fa: "نوع کانال" },
+  "alerts.displayName": { en: "Display name", fa: "نام نمایشی" },
+  "alerts.minSeverity": { en: "Minimum severity", fa: "حداقل شدت" },
+  "alerts.minSeverityHint": {
+    en: "Only alert this channel for incidents at or above this severity.",
+    fa: "فقط برای رخدادهای هم‌سطح یا شدیدتر از این، به این کانال اعلان بده.",
+  },
+  "alerts.onIncident": { en: "On new incidents", fa: "هنگام رخداد جدید" },
+  "alerts.onApproval": { en: "On approval requests", fa: "هنگام درخواست تأیید" },
+  "alerts.save": { en: "Save channel", fa: "ذخیره کانال" },
+  "alerts.saving": { en: "Saving…", fa: "در حال ذخیره…" },
+  "alerts.cancel": { en: "Cancel", fa: "انصراف" },
+  "alerts.test": { en: "Send test", fa: "ارسال تست" },
+  "alerts.testing": { en: "Sending…", fa: "در حال ارسال…" },
+  "alerts.enable": { en: "Enable", fa: "فعال‌سازی" },
+  "alerts.disable": { en: "Disable", fa: "غیرفعال‌سازی" },
+  "alerts.delete": { en: "Delete", fa: "حذف" },
+  "alerts.enabled": { en: "enabled", fa: "فعال" },
+  "alerts.disabled": { en: "disabled", fa: "غیرفعال" },
+  "alerts.secretSet": { en: "set", fa: "تنظیم‌شده" },
+  "alerts.lastSent": { en: "last sent", fa: "آخرین ارسال" },
+  "alerts.recent": { en: "Recent deliveries", fa: "ارسال‌های اخیر" },
+  "alerts.recentEmpty": { en: "No alerts sent yet.", fa: "هنوز اعلانی ارسال نشده." },
+  "alerts.statusConnected": { en: "healthy", fa: "سالم" },
+  "alerts.statusError": { en: "error", fa: "خطا" },
+  "alerts.statusUnknown": { en: "not tested", fa: "تست‌نشده" },
 };
 
 type Ctx = { lang: Lang; dir: "rtl" | "ltr"; setLang: (l: Lang) => void; t: (key: string) => string };

@@ -34,6 +34,19 @@ def _weekly_report_job() -> None:
         logger.exception("weekly report job failed")
 
 
+def _escalation_job() -> None:
+    """Re-alert response actions still waiting on manager approval (F: alerting)."""
+    from app.notifications.service import escalate_pending_approvals
+
+    try:
+        with Session(engine) as session:
+            n = escalate_pending_approvals(session)
+            if n:
+                logger.info("escalated %d pending approval(s)", n)
+    except Exception:  # noqa: BLE001
+        logger.exception("escalation job failed")
+
+
 def _retention_job() -> None:
     """Purge raw events/signals past the retention window (incidents are kept)."""
     from datetime import timedelta
@@ -64,6 +77,8 @@ def start_scheduler() -> None:
     _scheduler.add_job(_ingest_job, "interval", seconds=settings.ingest_interval_seconds,
                        id="ingest", max_instances=1, coalesce=True)
     _scheduler.add_job(_weekly_report_job, "interval", days=7, id="weekly_report")
+    _scheduler.add_job(_escalation_job, "interval", minutes=10, id="approval_escalation",
+                       max_instances=1, coalesce=True)
     _scheduler.add_job(_retention_job, "interval", days=1, id="retention")
     _scheduler.start()
     logger.info("scheduler started (mode=%s, ingest every %ss, retention %sd)",

@@ -245,3 +245,52 @@ class WeeklyReport(SQLModel, table=True):
     ai_generated: bool = False
     origin: str = Field(default="demo", index=True)   # data mode this row belongs to
     generated_at: datetime = Field(default_factory=utcnow, index=True)
+
+
+class NotificationChannel(SQLModel, table=True):
+    """A delivery channel for security alerts — email, Microsoft Teams or Slack.
+
+    Mirrors ``Connection``: non-secret settings live in ``config`` (safe to
+    return); secret credentials (SMTP password, webhook URL) are Fernet-encrypted
+    in ``secrets_enc`` and never returned by the API. Opt-in — no channels exist
+    until an admin adds one, so demo mode is never spammed.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    kind: str = Field(index=True)                     # "email" | "teams" | "slack"
+    display_name: str = ""
+    enabled: bool = True
+    # Only incidents at/above this severity notify this channel.
+    min_severity: str = "high"                        # low|medium|high|critical
+    notify_on_incident: bool = True
+    notify_on_approval: bool = True                   # escalate pending manager approvals
+    config: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
+    secrets_enc: str = ""                             # Fernet-encrypted JSON of secret fields
+    status: str = "unknown"                           # unknown | connected | error
+    last_error: str = ""
+    last_sent: Optional[datetime] = None
+    created_at: datetime = Field(default_factory=utcnow)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
+class Notification(SQLModel, table=True):
+    """A single alert delivery — audit trail, in-app feed, and dedup key.
+
+    Before sending we check whether a ``sent`` notification already exists for the
+    same (incident_id, channel_id, kind) at the same severity, so an incident that
+    is re-touched every ingest cycle is not re-alerted; a severity *increase* is a
+    new record (escalation).
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    channel_id: Optional[int] = Field(default=None, foreign_key="notificationchannel.id", index=True)
+    incident_id: Optional[int] = Field(default=None, foreign_key="incident.id", index=True)
+    action_id: Optional[int] = Field(default=None, foreign_key="auditaction.id", index=True)
+    kind: str = "incident"                            # incident | approval | digest | test
+    severity: str = "medium"                          # incident severity at send time
+    subject: str = ""
+    body: str = ""
+    status: str = "sent"                              # sent | failed | skipped
+    detail: str = ""                                  # error / skip reason
+    origin: str = Field(default="demo", index=True)   # data mode this row belongs to
+    created_at: datetime = Field(default_factory=utcnow, index=True)

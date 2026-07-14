@@ -13,6 +13,7 @@ from app.connectors.simulators import get_connector
 from app.core import runtime
 from app.core.time import utcnow
 from app.models.tables import AuditAction, Connection, Incident, User
+from app.notifications.service import notify_pending_approval
 
 # action -> (label, which connector executes it)
 AVAILABLE_ACTIONS = {
@@ -67,6 +68,8 @@ def request_action(session: Session, action_type: str, target: str,
     session.add(action)
     session.commit()
     session.refresh(action)
+    # Escalate: alert managers that an action is waiting on their approval.
+    notify_pending_approval(session, action)
     return action
 
 
