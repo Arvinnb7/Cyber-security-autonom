@@ -55,8 +55,11 @@ export const api = {
   incidents: (status?: string) =>
     request<any[]>(`/incidents${status ? `?status=${status}` : ""}`),
   incident: (id: number) => request<any>(`/incidents/${id}`),
-  setIncidentStatus: (id: number, status: string) =>
-    request<any>(`/incidents/${id}/status`, { method: "POST", body: JSON.stringify({ status }) }),
+  setIncidentStatus: (id: number, status: string, closed_reason?: string) =>
+    request<any>(`/incidents/${id}/status`, {
+      method: "POST",
+      body: JSON.stringify({ status, closed_reason }),
+    }),
   users: () => request<any[]>("/users"),
   assets: () => request<any[]>("/assets"),
   availableActions: () => request<any>("/actions/available"),
@@ -89,6 +92,18 @@ export const api = {
   testChannel: (id: number) => request<any>(`/notification-channels/${id}/test`, { method: "POST" }),
   deleteChannel: (id: number) => request<any>(`/notification-channels/${id}`, { method: "DELETE" }),
   notifications: (limit = 50) => request<any[]>(`/notifications?limit=${limit}`),
+  systemHealth: () => request<any>("/system/health"),
+  slaMetrics: (days = 30) => request<any>(`/metrics/sla?days=${days}`),
+  acknowledgeIncident: (id: number) =>
+    request<any>(`/incidents/${id}/acknowledge`, { method: "POST" }),
+  assignIncident: (id: number, assignee: string | null) =>
+    request<any>(`/incidents/${id}/assign`, { method: "POST", body: JSON.stringify({ assignee }) }),
+  addIncidentNote: (id: number, body: string) =>
+    request<any>(`/incidents/${id}/notes`, { method: "POST", body: JSON.stringify({ body }) }),
+  updateAsset: (id: number, body: any) =>
+    request<any>(`/assets/${id}`, { method: "PUT", body: JSON.stringify(body) }),
+  updateMonitoredUser: (id: number, body: any) =>
+    request<any>(`/users/${id}`, { method: "PUT", body: JSON.stringify(body) }),
   reports: () => request<any[]>("/reports"),
   report: (id: number) => request<any>(`/reports/${id}`),
   generateReport: () => request<any>("/reports/generate", { method: "POST" }),

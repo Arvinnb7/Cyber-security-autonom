@@ -1,21 +1,36 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { PageHeader, RiskPill, Spinner } from "@/components/ui";
 import { api } from "@/lib/api";
 import { useLang } from "@/lib/i18n";
+import { useMe } from "@/lib/me";
 
 export default function UsersAssetsPage() {
   const { t } = useLang();
+  const { isAdmin } = useMe();
   const [users, setUsers] = useState<any[] | null>(null);
   const [assets, setAssets] = useState<any[] | null>(null);
 
-  useEffect(() => {
-    api.users().then(setUsers);
-    api.assets().then(setAssets);
+  const load = useCallback(async () => {
+    setUsers(await api.users());
+    setAssets(await api.assets());
   }, []);
 
+  useEffect(() => {
+    load();
+  }, [load]);
+
   if (!users || !assets) return <Spinner />;
+
+  async function togglePrivileged(u: any) {
+    await api.updateMonitoredUser(u.id, { is_privileged: !u.is_privileged });
+    load();
+  }
+  async function setSensitivity(a: any, sensitivity: number) {
+    await api.updateAsset(a.id, { sensitivity });
+    load();
+  }
 
   return (
     <>
@@ -34,7 +49,19 @@ export default function UsersAssetsPage() {
                   </div>
                   <div className="text-xs text-slate-500">@{u.username} · {u.department} · {u.title}</div>
                 </div>
-                <RiskPill score={u.risk_score} />
+                <div className="flex items-center gap-2">
+                  {isAdmin && (
+                    <label className="flex items-center gap-1 text-[11px] text-slate-400" title={t("case.privileged")}>
+                      <input
+                        type="checkbox"
+                        checked={!!u.is_privileged}
+                        onChange={() => togglePrivileged(u)}
+                      />
+                      {t("case.privileged")}
+                    </label>
+                  )}
+                  <RiskPill score={u.risk_score} />
+                </div>
               </div>
             ))}
           </div>
@@ -51,7 +78,21 @@ export default function UsersAssetsPage() {
                     {a.asset_type} · {a.owner_department} · {t("common.sensitivity")} {a.sensitivity}/5
                   </div>
                 </div>
-                <RiskPill score={a.risk_score} />
+                <div className="flex items-center gap-2">
+                  {isAdmin && (
+                    <select
+                      className="rounded-lg border border-ink-600 bg-ink-950 px-1.5 py-1 text-[11px] outline-none focus:border-accent/60"
+                      value={a.sensitivity}
+                      onChange={(e) => setSensitivity(a, Number(e.target.value))}
+                      title={t("case.sensitivity")}
+                    >
+                      {[1, 2, 3, 4, 5].map((n) => (
+                        <option key={n} value={n}>{n}</option>
+                      ))}
+                    </select>
+                  )}
+                  <RiskPill score={a.risk_score} />
+                </div>
               </div>
             ))}
           </div>

@@ -15,10 +15,13 @@ _scheduler: BackgroundScheduler | None = None
 
 def _ingest_job() -> None:
     from app.ingestion.pipeline import run_full_cycle
+    from app.monitoring.health import record_cycle
 
     try:
         with Session(engine) as session:
-            run_full_cycle(session)
+            result = run_full_cycle(session)
+            # Heartbeat: proves to the watchdog that the engine is alive.
+            record_cycle(session, result.get("events_ingested", 0))
     except Exception:  # noqa: BLE001 - keep the scheduler alive
         logger.exception("ingest job failed")
 
@@ -45,6 +48,17 @@ def _escalation_job() -> None:
                 logger.info("escalated %d pending approval(s)", n)
     except Exception:  # noqa: BLE001
         logger.exception("escalation job failed")
+
+
+def _health_job() -> None:
+    """Watch the watcher: alert if the platform itself has gone blind."""
+    from app.monitoring.health import run_health_check
+
+    try:
+        with Session(engine) as session:
+            run_health_check(session)
+    except Exception:  # noqa: BLE001
+        logger.exception("health job failed")
 
 
 def _retention_job() -> None:
@@ -78,6 +92,8 @@ def start_scheduler() -> None:
                        id="ingest", max_instances=1, coalesce=True)
     _scheduler.add_job(_weekly_report_job, "interval", days=7, id="weekly_report")
     _scheduler.add_job(_escalation_job, "interval", minutes=10, id="approval_escalation",
+                       max_instances=1, coalesce=True)
+    _scheduler.add_job(_health_job, "interval", minutes=5, id="self_monitoring",
                        max_instances=1, coalesce=True)
     _scheduler.add_job(_retention_job, "interval", days=1, id="retention")
     _scheduler.start()

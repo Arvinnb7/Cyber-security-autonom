@@ -317,6 +317,43 @@ const DICT: Record<string, { en: string; fa: string }> = {
   "alerts.statusConnected": { en: "healthy", fa: "سالم" },
   "alerts.statusError": { en: "error", fa: "خطا" },
   "alerts.statusUnknown": { en: "not tested", fa: "تست‌نشده" },
+  "alerts.onHealth": { en: "On platform health issues", fa: "هنگام مشکلِ سلامتِ سامانه" },
+
+  // platform self-monitoring
+  "health.degraded": {
+    en: "Sentinel is not fully monitoring your environment",
+    fa: "Sentinel در حال حاضر محیط شما را کامل مانیتور نمی‌کند",
+  },
+  "health.warning": {
+    en: "While this is unresolved, an empty incident list does NOT mean you are safe.",
+    fa: "تا وقتی این مشکل حل نشده، خالی‌بودن فهرست رخدادها به معنی امن‌بودن نیست.",
+  },
+
+  // SLA / operations metrics
+  "sla.title": { en: "Response performance", fa: "کارایی پاسخ‌دهی" },
+  "sla.window": { en: "last 30 days", fa: "۳۰ روز اخیر" },
+  "sla.mtta": { en: "Mean time to acknowledge", fa: "میانگین زمان تا رسیدگی" },
+  "sla.mttr": { en: "Mean time to resolve", fa: "میانگین زمان تا حل" },
+  "sla.autonomous": { en: "Handled autonomously", fa: "پردازش‌شده به‌صورت خودکار" },
+  "sla.fpRate": { en: "False-positive rate", fa: "نرخ هشدار اشتباه" },
+
+  // casework
+  "case.assignee": { en: "Assigned to", fa: "واگذارشده به" },
+  "case.unassigned": { en: "unassigned", fa: "واگذارنشده" },
+  "case.assign": { en: "Assign", fa: "واگذاری" },
+  "case.acknowledge": { en: "Acknowledge", fa: "رسیدگی می‌کنم" },
+  "case.acknowledged": { en: "Acknowledged by", fa: "رسیدگی‌شده توسط" },
+  "case.notes": { en: "Case notes", fa: "یادداشت‌های پرونده" },
+  "case.notePlaceholder": { en: "Add a note for the record…", fa: "یادداشتی برای سابقه بنویس…" },
+  "case.addNote": { en: "Add note", fa: "افزودن یادداشت" },
+  "case.noNotes": { en: "No notes yet.", fa: "هنوز یادداشتی نیست." },
+  "case.closeReason": { en: "Closing reason", fa: "دلیل بستن" },
+  "case.true_positive": { en: "True positive", fa: "تهدید واقعی" },
+  "case.false_positive": { en: "False positive", fa: "هشدار اشتباه" },
+  "case.benign": { en: "Benign / expected", fa: "بی‌خطر / مورد انتظار" },
+  "case.sensitivity": { en: "Business sensitivity", fa: "حساسیت کسب‌وکار" },
+  "case.privileged": { en: "Privileged account", fa: "حساب دارای دسترسی ویژه" },
+  "case.save": { en: "Save", fa: "ذخیره" },
 };
 
 type Ctx = { lang: Lang; dir: "rtl" | "ltr"; setLang: (l: Lang) => void; t: (key: string) => string };

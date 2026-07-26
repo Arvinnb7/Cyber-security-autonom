@@ -240,6 +240,46 @@ def escalate_pending_approvals(session: Session) -> int:
     return escalated
 
 
+# --- platform health alerts (self-monitoring) -----------------------------
+# These intentionally bypass ``min_severity``: if the platform has gone blind,
+# that is always critical regardless of how a channel is tuned for incidents.
+
+def _render_health(issues: list, *, recovered: bool) -> tuple[str, str]:
+    if recovered:
+        return ("[Sentinel] RECOVERED — monitoring is healthy again",
+                "All previously reported platform health issues are resolved. "
+                "Event collection and detection are running normally.")
+    subject = f"[Sentinel] PLATFORM ALERT — monitoring degraded ({len(issues)} issue(s))"
+    lines = ["Sentinel is not fully monitoring your environment right now:", ""]
+    lines += [f"• {i.line()}" for i in issues]
+    lines += ["", "Until this is fixed, an empty incident list does NOT mean you are safe.",
+              f"Open Sentinel: {_base_url()}"]
+    return subject, "\n".join(lines)
+
+
+def _health_channels(session: Session) -> list[NotificationChannel]:
+    return [c for c in _enabled_channels(session) if c.notify_on_health]
+
+
+def notify_health(session: Session, issues: list, *, recovered: bool = False) -> int:
+    """Alert channels about the platform's own health. Never raises."""
+    if not settings.notifications_enabled:
+        return 0
+    try:
+        channels = _health_channels(session)
+        if not channels:
+            return 0
+        subject, body = _render_health(issues, recovered=recovered)
+        meta = {"severity": "low" if recovered else "critical"}
+        for ch in channels:
+            _send_and_log(session, ch, subject, body, meta, kind="health",
+                          severity=meta["severity"])
+        return len(channels)
+    except Exception:  # noqa: BLE001 - alerting must never break the watchdog
+        logger.exception("notify_health failed")
+        return 0
+
+
 # --- test delivery (used by the "Send test" endpoint) ---------------------
 
 def send_test(session: Session, channel: NotificationChannel) -> tuple[bool, str]:

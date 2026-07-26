@@ -156,6 +156,14 @@ export default function AlertingPage() {
                       />
                       {t("alerts.onApproval")}
                     </label>
+                    <label className="flex items-center gap-2 text-xs text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={c.notify_on_health}
+                        onChange={(e) => setFlag(c, "notify_on_health", e.target.checked)}
+                      />
+                      {t("alerts.onHealth")}
+                    </label>
                   </div>
                 </div>
 

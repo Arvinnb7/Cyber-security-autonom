@@ -6,35 +6,21 @@ those points into ``threat_score``. Detectors stay transparent and rule-based.
 """
 from __future__ import annotations
 
-import math
 from collections import defaultdict
 from datetime import timedelta
 
 from sqlmodel import Session, select
 
 from app.core import runtime
+from app.core.config import settings
 from app.core.time import utcnow
 from app.detection.baseline import Baselines
 from app.detection.catalog import get_definition
+from app.detection.geo import implied_speed_kmh
 from app.models.tables import Event, Signal
-from app.simulation.org import GEO, is_privileged
 
 # Look back this far when correlating an event chain.
 WINDOW_MINUTES = 180
-
-
-# --- helpers --------------------------------------------------------------
-
-def _haversine_km(c1: str, c2: str) -> float:
-    if c1 not in GEO or c2 not in GEO:
-        return 0.0
-    _, lat1, lon1 = GEO[c1]
-    _, lat2, lon2 = GEO[c2]
-    r = 6371.0
-    p1, p2 = math.radians(lat1), math.radians(lat2)
-    dphi, dlmb = math.radians(lat2 - lat1), math.radians(lon2 - lon1)
-    a = math.sin(dphi / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dlmb / 2) ** 2
-    return 2 * r * math.asin(math.sqrt(a))
 
 
 def _recent_events(session: Session) -> list[Event]:
@@ -133,13 +119,15 @@ def det_suspicious_login(events: list[Event], baselines: Baselines) -> list[Sign
             keys.add("unusual_time")
         if _flag(evs, "login_success", "risky_ip") or _flag(evs, "login_failed", "risky_ip"):
             keys.add("risky_ip")
-        # impossible travel
+        # Impossible travel — worldwide. An unknown country yields None and is
+        # skipped rather than silently scoring as "no travel".
         for a, b in zip(logins, logins[1:]):
             if a.country != b.country:
-                hrs = max((b.timestamp - a.timestamp).total_seconds() / 3600, 1 / 60)
-                if _haversine_km(a.country, b.country) / hrs > 900:
+                hrs = (b.timestamp - a.timestamp).total_seconds() / 3600
+                speed = implied_speed_kmh(a.country, b.country, hrs)
+                if speed is not None and speed > settings.impossible_travel_kmh:
                     keys.add("impossible_travel")
-        if is_privileged(user):
+        if baselines.is_privileged(user):
             keys.add("privileged_user")
         if {"new_country", "impossible_travel", "risky_ip"} & keys:
             sig = make_signal("DET-001", keys, actor=user, asset=logins[-1].target_asset,
@@ -164,11 +152,11 @@ def det_account_compromise(events: list[Event], baselines: Baselines) -> list[Si
             keys.add("mfa_disabled")
         if _has(evs, "password_changed"):
             keys.add("password_changed")
-        if _count(evs, "file_download") >= 15:
+        if _count(evs, "file_download") >= settings.mass_download_count:
             keys.add("mass_file_download")
-        if _count(evs, "email_send") >= 10:
+        if _count(evs, "email_send") >= settings.email_spam_count:
             keys.add("email_spam_behavior")
-        if is_privileged(user):
+        if baselines.is_privileged(user):
             keys.add("privileged_user")
         if {"mfa_disabled", "mass_file_download", "suspicious_login_before_change"} & keys and len(keys) >= 2:
             related = [e for e in evs if e.action in
@@ -197,7 +185,7 @@ def det_phishing(events: list[Event], baselines: Baselines) -> list[Signal]:
             keys.add("malicious_url")
         if any(e.raw.get("attachment") for e in evs):
             keys.add("suspicious_attachment")
-        if len(evs) >= 5:
+        if len(evs) >= settings.phishing_recipient_count:
             keys.add("mass_recipient_count")
         if any(e.raw.get("cred_keywords") for e in evs):
             keys.add("credential_harvesting_keywords")
@@ -249,7 +237,7 @@ def det_ransomware(events: list[Event], baselines: Baselines) -> list[Signal]:
     for asset, evs in _by_asset(events).items():
         renames = _count(evs, "file_rename")
         keys: set[str] = set()
-        if renames >= 20:
+        if renames >= settings.ransomware_rename_count:
             keys.add("mass_file_modification")
             keys.add("rapid_encryption_pattern")
         if _has(evs, "shadow_copy_delete"):
@@ -278,7 +266,7 @@ def det_data_exfiltration(events: list[Event], baselines: Baselines) -> list[Sig
     out: list[Signal] = []
     for user, evs in _by_user(events).items():
         keys: set[str] = set()
-        if _count(evs, "file_download") >= 20:
+        if _count(evs, "file_download") >= settings.exfil_download_count:
             keys.add("large_download_volume")
             keys.add("sensitive_data_access")
         uploads = [e for e in evs if e.action == "large_upload"]
@@ -317,7 +305,7 @@ def det_privilege_abuse(events: list[Event], baselines: Baselines) -> list[Signa
             keys.add("security_control_disabled")
         if _flag(evs, "admin_activity", "new_device"):
             keys.add("new_device_for_admin")
-        if _count(evs, "permission_change") >= 3:
+        if _count(evs, "permission_change") >= settings.admin_change_count:
             keys.add("multiple_admin_changes")
         if {"new_admin_user_created", "security_control_disabled", "sensitive_permission_change"} & keys:
             related = [e for e in evs if e.action in
@@ -370,7 +358,7 @@ def det_lateral_movement(events: list[Event], baselines: Baselines) -> list[Sign
         remote_logins = [e for e in evs if e.action == "remote_login"]
         hosts = {e.target_asset for e in remote_logins if e.target_asset}
         keys: set[str] = set()
-        if len(hosts) >= 3:
+        if len(hosts) >= settings.lateral_host_count:
             keys.add("multiple_hosts_accessed")
             keys.add("new_internal_access_pattern")
         if _has(evs, "remote_exec"):

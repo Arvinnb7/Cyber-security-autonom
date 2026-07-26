@@ -95,6 +95,66 @@ def detections_by_severity(session: Session) -> dict[str, int]:
     return counts
 
 
+def _minutes_between(start, end) -> float | None:
+    if start is None or end is None:
+        return None
+    return max((end - start).total_seconds() / 60.0, 0.0)
+
+
+def _avg(values: list[float]) -> float | None:
+    return round(sum(values) / len(values), 1) if values else None
+
+
+def sla_metrics(session: Session, days: int = 30) -> dict:
+    """Response-time & accuracy metrics — the evidence that the automation is
+    doing the tier-1 job.
+
+    MTTA  = incident created -> a human acknowledged it
+    MTTR  = incident created -> case closed (resolved/dismissed)
+    Anything Sentinel triaged and closed without a human ever acknowledging it
+    counts as *autonomously handled* — that is the headcount argument, stated
+    honestly rather than assumed.
+    """
+    cutoff = utcnow() - timedelta(days=days)
+    incidents = list(session.exec(
+        select(Incident).where(Incident.origin == runtime.current_mode(),
+                               Incident.created_at >= cutoff)
+    ))
+    total = len(incidents)
+    ack_times = [m for m in (_minutes_between(i.created_at, i.acknowledged_at) for i in incidents)
+                 if m is not None]
+    res_times = [m for m in (_minutes_between(i.created_at, i.resolved_at) for i in incidents)
+                 if m is not None]
+    closed = [i for i in incidents if i.status in ("resolved", "dismissed")]
+    with_reason = [i for i in closed if i.closed_reason]
+    false_positives = [i for i in with_reason if i.closed_reason == "false_positive"]
+    # Closed with no human acknowledgement = handled without analyst attention.
+    autonomous = [i for i in closed if i.acknowledged_at is None]
+
+    by_detection: dict[str, dict[str, int]] = {}
+    for i in with_reason:
+        row = by_detection.setdefault(i.det_id or "unknown", {"closed": 0, "false_positive": 0})
+        row["closed"] += 1
+        if i.closed_reason == "false_positive":
+            row["false_positive"] += 1
+
+    return {
+        "window_days": days,
+        "incidents": total,
+        "closed": len(closed),
+        "mtta_minutes": _avg(ack_times),
+        "mttr_minutes": _avg(res_times),
+        "acknowledged": len(ack_times),
+        "triaged_with_reason": len(with_reason),
+        "false_positives": len(false_positives),
+        "false_positive_rate": (round(100.0 * len(false_positives) / len(with_reason), 1)
+                                if with_reason else None),
+        "autonomously_handled": len(autonomous),
+        "autonomous_pct": round(100.0 * len(autonomous) / len(closed), 1) if closed else None,
+        "by_detection": by_detection,
+    }
+
+
 def stats_overview(session: Session) -> dict:
     mode = runtime.current_mode()
     total = session.exec(select(func.count(Incident.id)).where(Incident.origin == mode)).one()

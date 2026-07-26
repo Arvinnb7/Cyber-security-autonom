@@ -25,6 +25,18 @@ class Settings(BaseSettings):
     # Re-notify a still-pending manager approval after this many minutes (escalation).
     approval_escalation_minutes: int = 30
 
+    # --- Self-monitoring (watchdog) ------------------------------------------
+    # A SOC that replaces human watchers must notice when it goes blind. If no
+    # events have been ingested for this long (live mode, with an enabled
+    # connection), the platform alerts instead of silently showing "0 threats".
+    health_stale_minutes: int = 30
+    # Consider the scheduler dead if it hasn't run a cycle for this long.
+    health_cycle_stale_minutes: int = 15
+    # Re-alert an unchanged, still-degraded state at most this often.
+    health_alert_cooldown_minutes: int = 60
+    # A connection is "down" after this many consecutive poll failures.
+    health_connector_failures: int = 3
+
     # --- Data mode -----------------------------------------------------------
     # "demo" => seed demo org + attack scenarios and run the simulators.
     # "live" => no demo data, no simulators; only real connectors feed the DB.
@@ -71,6 +83,19 @@ class Settings(BaseSettings):
     attack_models_dir: str = ""
     # Detection catalog (the MVP source of truth). Empty => backend/data/detection_catalog.json
     detection_catalog_path: str = ""
+
+    # --- Detection thresholds (calibrate per deployment) ---------------------
+    # Every organization is different: a media team downloads far more files than
+    # a law firm. These are the tuning knobs an operator adjusts to cut false
+    # positives without touching code.
+    impossible_travel_kmh: float = 900.0   # implied speed that can't be real travel
+    mass_download_count: int = 15          # DET-002 bulk download
+    exfil_download_count: int = 20         # DET-006 exfiltration volume
+    email_spam_count: int = 10             # DET-002 outbound spam burst
+    ransomware_rename_count: int = 20      # DET-005 rapid file renames
+    phishing_recipient_count: int = 5      # DET-003 campaign breadth
+    admin_change_count: int = 3            # DET-007 repeated permission changes
+    lateral_host_count: int = 3            # DET-009 hosts touched
 
     # --- Risk scoring weights (F4) — the heart of the product ---
     # final_score = weighted blend of the four sub-scores, then 0..100

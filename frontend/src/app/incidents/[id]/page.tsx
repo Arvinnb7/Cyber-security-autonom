@@ -10,13 +10,15 @@ import { useMe } from "@/lib/me";
 
 export default function IncidentDetail() {
   const { t, lang } = useLang();
-  const { isAdmin, isAnalystUp } = useMe();
+  const { me, isAdmin, isAnalystUp } = useMe();
   const { id } = useParams<{ id: string }>();
   const incidentId = Number(id);
   const [inc, setInc] = useState<any>(null);
   const [actions, setActions] = useState<any[]>([]);
   const [confirm, setConfirm] = useState<{ type: string; label: string; target: string } | null>(null);
   const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const [reason, setReason] = useState("true_positive");
 
   const load = useCallback(async () => {
     const [detail, avail] = await Promise.all([api.incident(incidentId), api.availableActions()]);
@@ -41,8 +43,27 @@ export default function IncidentDetail() {
     }
   }
 
-  async function setStatus(status: string) {
-    await api.setIncidentStatus(incidentId, status);
+  async function setStatus(status: string, closedReason?: string) {
+    await api.setIncidentStatus(incidentId, status, closedReason);
+    await load();
+  }
+
+  async function acknowledge() {
+    await api.acknowledgeIncident(incidentId);
+    await load();
+  }
+
+  async function assignToMe() {
+    if (!me) return;
+    await api.assignIncident(incidentId, me.username);
+    await load();
+  }
+
+  async function addNote() {
+    const body = note.trim();
+    if (!body) return;
+    await api.addIncidentNote(incidentId, body);
+    setNote("");
     await load();
   }
 
@@ -198,15 +219,86 @@ export default function IncidentDetail() {
           <div className="card">
             <h2 className="mb-3 text-sm font-medium text-slate-300">{t("det.triage")}</h2>
             {isAnalystUp && (
-              <div className="flex flex-wrap gap-2">
-                <button className="btn" onClick={() => setStatus("investigating")}>{t("triage.investigating")}</button>
-                <button className="btn btn-accent" onClick={() => setStatus("resolved")}>{t("triage.resolve")}</button>
-                <button className="btn" onClick={() => setStatus("dismissed")}>{t("triage.dismiss")}</button>
-              </div>
+              <>
+                <label className="mb-1 block text-xs text-slate-400">{t("case.closeReason")}</label>
+                <select
+                  className="mb-3 w-full rounded-xl border border-ink-600 bg-ink-950 px-3 py-2 text-sm outline-none focus:border-accent/60"
+                  value={reason}
+                  onChange={(e) => setReason(e.target.value)}
+                >
+                  {["true_positive", "false_positive", "benign"].map((r) => (
+                    <option key={r} value={r}>{t(`case.${r}`)}</option>
+                  ))}
+                </select>
+                <div className="flex flex-wrap gap-2">
+                  <button className="btn" onClick={() => setStatus("investigating")}>{t("triage.investigating")}</button>
+                  <button className="btn btn-accent" onClick={() => setStatus("resolved", reason)}>{t("triage.resolve")}</button>
+                  <button className="btn" onClick={() => setStatus("dismissed", reason)}>{t("triage.dismiss")}</button>
+                </div>
+              </>
             )}
             <div className="mt-3 flex items-center gap-2 text-xs text-slate-500">
               {t("det.currentStatus")} <StatusPill status={inc.status} />
             </div>
+            {inc.closed_reason && (
+              <div className="mt-1 text-xs text-slate-500">
+                {t("case.closeReason")}: <span className="text-slate-300">{t(`case.${inc.closed_reason}`)}</span>
+              </div>
+            )}
+          </div>
+
+          <div className="card">
+            <h2 className="mb-3 text-sm font-medium text-slate-300">{t("case.notes")}</h2>
+            <div className="space-y-1 text-xs text-slate-400">
+              <div className="flex justify-between">
+                <span>{t("case.assignee")}</span>
+                <span className="text-slate-300">{inc.assigned_to || t("case.unassigned")}</span>
+              </div>
+              {inc.acknowledged_by && (
+                <div className="flex justify-between">
+                  <span>{t("case.acknowledged")}</span>
+                  <span className="text-slate-300">{inc.acknowledged_by}</span>
+                </div>
+              )}
+            </div>
+
+            {isAnalystUp && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                {!inc.acknowledged_at && (
+                  <button className="btn" onClick={acknowledge}>{t("case.acknowledge")}</button>
+                )}
+                <button className="btn" onClick={assignToMe}>{t("case.assign")}</button>
+              </div>
+            )}
+
+            <div className="mt-3 space-y-2">
+              {(inc.notes || []).length === 0 && (
+                <p className="text-xs text-slate-500">{t("case.noNotes")}</p>
+              )}
+              {(inc.notes || []).map((n: any) => (
+                <div key={n.id} className="rounded-lg border border-ink-700/60 bg-ink-850/60 p-2 text-xs">
+                  <div className="text-slate-300">{n.body}</div>
+                  <div className="mt-1 text-[10px] text-slate-500">
+                    {n.author} · {new Date(n.created_at).toLocaleString()}
+                  </div>
+                </div>
+              ))}
+            </div>
+
+            {isAnalystUp && (
+              <div className="mt-3">
+                <textarea
+                  className="w-full rounded-xl border border-ink-600 bg-ink-950 px-3 py-2 text-sm outline-none focus:border-accent/60"
+                  rows={2}
+                  placeholder={t("case.notePlaceholder")}
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                />
+                <button className="btn mt-2 w-full" onClick={addNote} disabled={!note.trim()}>
+                  {t("case.addNote")}
+                </button>
+              </div>
+            )}
           </div>
         </div>
       </div>

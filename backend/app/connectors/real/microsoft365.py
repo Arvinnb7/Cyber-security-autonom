@@ -119,7 +119,40 @@ class Microsoft365Connector(RealConnector):
                 events.extend(self._management_activity())
             except ConnectorError as exc:
                 logger.info("m365 activity feed unavailable: %s", exc)
+        # Tag events belonging to real directory admins so scoring treats the
+        # customer's actual privileged accounts as privileged.
+        privileged = self._privileged_upns(token)
+        if privileged:
+            for e in events:
+                if e.actor_username and e.actor_username.lower() in privileged:
+                    e.raw["is_privileged"] = True
         return events
+
+    def _privileged_upns(self, token: str) -> set[str]:
+        """UPNs holding an Azure AD directory role (i.e. real admins).
+
+        Resilient: if the app lacks ``Directory.Read.All`` this returns an empty
+        set and detection continues without the privilege boost.
+        """
+        upns: set[str] = set()
+        try:
+            roles = self._get(token, "directoryRoles")
+        except ConnectorError as exc:
+            logger.info("m365 directory roles unavailable: %s", exc)
+            return upns
+        for role in roles:
+            role_id = role.get("id")
+            if not role_id:
+                continue
+            try:
+                members = self._get(token, f"directoryRoles/{role_id}/members")
+            except ConnectorError:
+                continue
+            for m in members:
+                upn = m.get("userPrincipalName")
+                if upn:
+                    upns.add(upn.lower())
+        return upns
 
     def _signins(self, token: str, since: str | None = None) -> list[RawEvent]:
         out: list[RawEvent] = []

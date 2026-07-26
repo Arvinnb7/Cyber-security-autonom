@@ -14,10 +14,19 @@ export default function Dashboard() {
   const [data, setData] = useState<any>(null);
   const [aiOn, setAiOn] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [health, setHealth] = useState<any>(null);
+  const [sla, setSla] = useState<any>(null);
 
   const load = useCallback(async () => {
-    const [overview, meta] = await Promise.all([api.overview(), api.meta().catch(() => null)]);
+    const [overview, meta, sys, slaData] = await Promise.all([
+      api.overview(),
+      api.meta().catch(() => null),
+      api.systemHealth().catch(() => null),
+      api.slaMetrics().catch(() => null),
+    ]);
     setData(overview);
+    setHealth(sys);
+    setSla(slaData);
     if (meta) setAiOn(meta.ai_enabled);
   }, []);
 
@@ -67,6 +76,22 @@ export default function Dashboard() {
         }
       />
 
+      {health?.state === "degraded" && (
+        <div className="mb-4 rounded-xl border border-risk-critical/40 bg-risk-critical/10 p-4">
+          <div className="flex items-center gap-2 font-medium text-risk-critical">
+            <span>⚠</span> {t("health.degraded")}
+          </div>
+          <ul className="mt-2 space-y-1 text-xs text-slate-300">
+            {(health.issues || []).map((i: any) => (
+              <li key={i.key}>
+                <span className="font-medium">{i.title}</span> — <span className="text-slate-400">{i.detail}</span>
+              </li>
+            ))}
+          </ul>
+          <div className="mt-2 text-[11px] text-slate-400">{t("health.warning")}</div>
+        </div>
+      )}
+
       <div className="grid gap-5 lg:grid-cols-3">
         <div className="card lg:col-span-1">
           <div className="mb-2 text-sm font-medium text-slate-300">{t("dash.overall")}</div>
@@ -113,6 +138,28 @@ export default function Dashboard() {
           </div>
         </div>
       </div>
+
+      {sla && (
+        <div className="card mt-5">
+          <div className="mb-3 flex items-baseline justify-between">
+            <span className="text-sm font-medium text-slate-300">{t("sla.title")}</span>
+            <span className="text-[11px] text-slate-500">{t("sla.window")}</span>
+          </div>
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+            <Metric label={t("sla.mtta")} value={fmtMinutes(sla.mtta_minutes)} />
+            <Metric label={t("sla.mttr")} value={fmtMinutes(sla.mttr_minutes)} />
+            <Metric
+              label={t("sla.autonomous")}
+              value={sla.autonomous_pct === null || sla.autonomous_pct === undefined ? "—" : `${sla.autonomous_pct}%`}
+            />
+            <Metric
+              label={t("sla.fpRate")}
+              value={sla.false_positive_rate === null || sla.false_positive_rate === undefined
+                ? "—" : `${sla.false_positive_rate}%`}
+            />
+          </div>
+        </div>
+      )}
 
       <div className="mt-5 grid gap-5 lg:grid-cols-3">
         <div className="card">
@@ -176,6 +223,12 @@ export default function Dashboard() {
       </div>
     </>
   );
+}
+
+function fmtMinutes(v: number | null | undefined): string {
+  if (v === null || v === undefined) return "—";
+  if (v < 60) return `${Math.round(v)}m`;
+  return `${(v / 60).toFixed(1)}h`;
 }
 
 function Metric({ label, value }: { label: string; value: number | string }) {

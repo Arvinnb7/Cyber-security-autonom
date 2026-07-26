@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from sqlmodel import Session, select
 
 from app.core.time import utcnow
-from app.models.tables import Event
+from app.models.tables import Event, User
 
 # How far back to learn "normal" behaviour, and how much history is needed
 # before the baseline is trusted enough to flag deviations.
@@ -77,8 +77,19 @@ class Baselines:
             if e.actor_username:
                 by_user.setdefault(e.actor_username, []).append(e)
         self._by_user = {u: _build_user_baseline(evs) for u, evs in by_user.items()}
+        # Privileged identities come from the monitored-user table for THIS data
+        # mode — never from the demo fixture — so the customer's real admins are
+        # scored as privileged on live data.
+        self._privileged = {
+            u.username for u in session.exec(
+                select(User).where(User.origin == origin, User.is_privileged == True)  # noqa: E712
+            )
+        }
 
     def for_user(self, username: str | None) -> UserBaseline:
         if not username:
             return UserBaseline()
         return self._by_user.get(username, UserBaseline())
+
+    def is_privileged(self, username: str | None) -> bool:
+        return bool(username) and username in self._privileged

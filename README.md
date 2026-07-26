@@ -123,7 +123,7 @@ provides:
 
 | Detection | Works on real data today | Source needed |
 |-----------|--------------------------|---------------|
-| DET-001 Suspicious Login | ✅ (M365 sign-ins + baseline) | Microsoft 365 |
+| DET-001 Suspicious Login | ✅ (M365 sign-ins + baseline, worldwide impossible-travel, real admin privilege) | Microsoft 365 |
 | DET-002 Account Compromise | ✅ (sign-ins + MFA/password audit + file activity) | Microsoft 365 |
 | DET-007 Privilege Abuse | ⚠️ partial (directory audit) | Microsoft 365 |
 | DET-003 Phishing | ⚠️ needs mail-security signal | Defender for O365 (Phase 4) |
@@ -170,6 +170,46 @@ alert to your team's channels:
   encrypted at rest (Fernet) and never returned by the API.
 - **Opt-in & safe in demo:** no channels exist until an admin adds one, so demo
   mode never alerts anyone by accident.
+
+## Self-monitoring — why you can leave it unattended
+
+The dangerous failure mode for an autonomous SOC is **silent blindness**: an
+expired API secret stops ingestion, the dashboard shows *"0 active threats"*
+(which reads like good news), and if you have removed the humans, nobody notices.
+Sentinel watches itself:
+
+- **Three checks, every 5 minutes:** an enabled integration that is failing to
+  poll, no events ingested inside the staleness window (live mode), and a
+  scheduler that has stopped running cycles (it heartbeats each ingest).
+- **Alerts bypass severity tuning.** Health alerts go to every channel with
+  *"On platform health issues"* enabled regardless of its `min_severity` — a
+  blind SOC is always critical. You get one alert per state change (not a stream)
+  and an explicit **RECOVERED** notice when it clears.
+- **Visible in the product:** a red banner on the dashboard and
+  `GET /api/system/health`, both stating plainly that an empty incident list does
+  not mean you are safe.
+
+## Response performance & what it replaces
+
+Sentinel records the case work, so the value is measured rather than asserted:
+
+- **Casework:** incidents can be acknowledged, assigned, annotated with notes,
+  and closed with a reason (`true_positive` / `false_positive` / `benign`) — a
+  full audit record of who did what and when.
+- **Metrics** (`GET /api/metrics/sla`, dashboard tiles, weekly report):
+  **MTTA**, **MTTR**, **false-positive rate**, and **% handled autonomously**
+  (closed without a human ever acknowledging them).
+- The weekly report converts that into an effort estimate ("~N hours of analyst
+  time avoided") using a stated 20-min-per-alert triage assumption — an
+  **estimate**, labelled as one, not a guarantee.
+- False positives are tracked per detection, so you can see which rule is noisy
+  and calibrate its threshold (`SENTINEL_MASS_DOWNLOAD_COUNT`,
+  `SENTINEL_IMPOSSIBLE_TRAVEL_KMH`, etc. — see `backend/.env.example`).
+
+**Honest scope:** this makes the tier-1 *watch → triage → enrich → first
+response* loop autonomous for an M365/Azure estate. It does **not** cover
+malware/ransomware detection, which needs EDR telemetry (a later phase), and
+incident *ownership* still belongs to a human — the platform escalates to them.
 
 ## Production deployment
 

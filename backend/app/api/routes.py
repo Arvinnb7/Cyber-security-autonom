@@ -23,6 +23,8 @@ from app.models.schemas import (
     AccountCreate,
     AccountUpdate,
     ActionRequest,
+    AssetUpdate,
+    AssignRequest,
     ChannelCreate,
     ChannelUpdate,
     ChatRequest,
@@ -31,6 +33,8 @@ from app.models.schemas import (
     ConnectionUpdate,
     InjectRequest,
     ModeUpdate,
+    MonitoredUserUpdate,
+    NoteCreate,
     StatusUpdate,
     Token,
 )
@@ -42,6 +46,7 @@ from app.models.tables import (
     Connection,
     DetectionDefinition,
     Incident,
+    IncidentNote,
     Notification,
     NotificationChannel,
     Signal,
@@ -87,6 +92,14 @@ def ready(session: Session = DB):
         return {"status": "ready"}
     except Exception as exc:  # noqa: BLE001
         return JSONResponse(status_code=503, content={"status": "not_ready", "detail": str(exc)})
+
+
+@api_router.get("/system/health")
+def system_health(_: str = Auth, session: Session = DB) -> dict:
+    """Platform self-monitoring: is Sentinel actually watching right now?"""
+    from app.monitoring.health import health_snapshot
+
+    return health_snapshot(session)
 
 
 @api_router.get("/connectors")
@@ -268,11 +281,20 @@ def get_incident(incident_id: int, _: str = Auth, session: Session = DB) -> dict
         raise HTTPException(status_code=404, detail="incident not found")
     signals = list(session.exec(select(Signal).where(Signal.incident_id == incident_id)))
     actions = list(session.exec(select(AuditAction).where(AuditAction.incident_id == incident_id)))
+    notes = list(session.exec(
+        select(IncidentNote).where(IncidentNote.incident_id == incident_id)
+        .order_by(IncidentNote.created_at)
+    ))
     return {
         **_incident_full(incident),
         "signals": [s.model_dump() for s in signals],
         "actions": [a.model_dump() for a in actions],
+        "notes": [{"id": n.id, "author": n.author, "body": n.body, "created_at": n.created_at}
+                  for n in notes],
     }
+
+
+CLOSED_REASONS = ("true_positive", "false_positive", "benign")
 
 
 @api_router.post("/incidents/{incident_id}/status")
@@ -283,8 +305,22 @@ def update_incident_status(incident_id: int, body: StatusUpdate, request: Reques
         raise HTTPException(status_code=404, detail="incident not found")
     if body.status not in ("open", "investigating", "resolved", "dismissed"):
         raise HTTPException(status_code=400, detail="invalid status")
+    if body.closed_reason and body.closed_reason not in CLOSED_REASONS:
+        raise HTTPException(status_code=400, detail=f"closed_reason must be one of {CLOSED_REASONS}")
+    now = utcnow()
     incident.status = body.status
-    incident.updated_at = utcnow()
+    if body.closed_reason:
+        incident.closed_reason = body.closed_reason
+    # Closing the case stops the response clock (feeds MTTR).
+    if body.status in ("resolved", "dismissed"):
+        incident.resolved_at = incident.resolved_at or now
+    else:
+        incident.resolved_at = None
+    # Any human touch counts as acknowledgement (feeds MTTA).
+    if incident.acknowledged_at is None:
+        incident.acknowledged_at = now
+        incident.acknowledged_by = account.username
+    incident.updated_at = now
     session.add(incident)
     session.commit()
     # Recompute the actor's rolling risk after a state change.
@@ -292,8 +328,71 @@ def update_incident_status(incident_id: int, body: StatusUpdate, request: Reques
 
     recompute_user_risk(session, incident.actor_username)
     record_audit(session, account.username, "incident.status", target=str(incident_id),
-                 detail={"status": body.status}, request=request)
-    return {"ok": True, "status": incident.status}
+                 detail={"status": body.status, "closed_reason": body.closed_reason or ""},
+                 request=request)
+    return {"ok": True, "status": incident.status, "closed_reason": incident.closed_reason}
+
+
+@api_router.post("/incidents/{incident_id}/acknowledge")
+def acknowledge_incident(incident_id: int, request: Request,
+                         account: Account = AnalystUp, session: Session = DB) -> dict:
+    """Claim the case: 'a human has seen this'. Starts the MTTA clock stopping."""
+    incident = session.get(Incident, incident_id)
+    if incident is None:
+        raise HTTPException(status_code=404, detail="incident not found")
+    if incident.acknowledged_at is None:
+        incident.acknowledged_at = utcnow()
+        incident.acknowledged_by = account.username
+        incident.updated_at = utcnow()
+        session.add(incident)
+        session.commit()
+        session.refresh(incident)
+    record_audit(session, account.username, "incident.acknowledge", target=str(incident_id),
+                 request=request)
+    return {"ok": True, "acknowledged_at": incident.acknowledged_at,
+            "acknowledged_by": incident.acknowledged_by}
+
+
+@api_router.post("/incidents/{incident_id}/assign")
+def assign_incident(incident_id: int, body: AssignRequest, request: Request,
+                    account: Account = AnalystUp, session: Session = DB) -> dict:
+    incident = session.get(Incident, incident_id)
+    if incident is None:
+        raise HTTPException(status_code=404, detail="incident not found")
+    if body.assignee:
+        target = session.exec(select(Account).where(Account.username == body.assignee)).first()
+        if target is None:
+            raise HTTPException(status_code=400, detail=f"no such account: {body.assignee}")
+    incident.assigned_to = body.assignee or None
+    incident.updated_at = utcnow()
+    session.add(incident)
+    session.commit()
+    record_audit(session, account.username, "incident.assign", target=str(incident_id),
+                 detail={"assignee": body.assignee or ""}, request=request)
+    return {"ok": True, "assigned_to": incident.assigned_to}
+
+
+@api_router.post("/incidents/{incident_id}/notes")
+def add_incident_note(incident_id: int, body: NoteCreate, request: Request,
+                      account: Account = AnalystUp, session: Session = DB) -> dict:
+    incident = session.get(Incident, incident_id)
+    if incident is None:
+        raise HTTPException(status_code=404, detail="incident not found")
+    text = (body.body or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="note body is empty")
+    note = IncidentNote(incident_id=incident_id, author=account.username, body=text)
+    session.add(note)
+    session.commit()
+    session.refresh(note)
+    record_audit(session, account.username, "incident.note", target=str(incident_id), request=request)
+    return {"id": note.id, "author": note.author, "body": note.body, "created_at": note.created_at}
+
+
+@api_router.get("/metrics/sla")
+def sla_metrics(days: int = 30, _: str = Auth, session: Session = DB) -> dict:
+    """Response-time and accuracy metrics — the ROI evidence for the business."""
+    return analytics.sla_metrics(session, days=days)
 
 
 # --- Users & Assets -------------------------------------------------------
@@ -306,6 +405,52 @@ def list_users(_: str = Auth, session: Session = DB) -> list[dict]:
 @api_router.get("/assets")
 def list_assets(_: str = Auth, session: Session = DB) -> list[dict]:
     return [_asset_brief(a) for a in analytics.riskiest_assets(session, 100)]
+
+
+@api_router.put("/assets/{asset_id}")
+def update_asset(asset_id: int, body: AssetUpdate, request: Request,
+                 account: Account = AdminOnly, session: Session = DB) -> dict:
+    """Correct the auto-classified business criticality (drives asset_risk)."""
+    from app.scoring.engine import recompute_asset_risk
+
+    asset = session.get(Asset, asset_id)
+    if asset is None:
+        raise HTTPException(status_code=404, detail="asset not found")
+    if body.sensitivity is not None:
+        if not 1 <= body.sensitivity <= 5:
+            raise HTTPException(status_code=400, detail="sensitivity must be 1..5")
+        asset.sensitivity = body.sensitivity
+    if body.owner_department is not None:
+        asset.owner_department = body.owner_department
+    if body.asset_type is not None:
+        asset.asset_type = body.asset_type
+    session.add(asset)
+    session.commit()
+    recompute_asset_risk(session, asset.name)
+    session.refresh(asset)
+    record_audit(session, account.username, "asset.update", target=asset.name, request=request)
+    return _asset_brief(asset)
+
+
+@api_router.put("/users/{user_id}")
+def update_monitored_user(user_id: int, body: MonitoredUserUpdate, request: Request,
+                          account: Account = AdminOnly, session: Session = DB) -> dict:
+    """Mark a monitored identity as privileged (raises user_risk & scoring)."""
+    user = session.get(User, user_id)
+    if user is None:
+        raise HTTPException(status_code=404, detail="user not found")
+    if body.is_privileged is not None:
+        user.is_privileged = body.is_privileged
+    if body.department is not None:
+        user.department = body.department
+    if body.title is not None:
+        user.title = body.title
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    record_audit(session, account.username, "monitored_user.update",
+                 target=user.username, request=request)
+    return _user_brief(user)
 
 
 # --- Semi-automatic response (F8) -----------------------------------------
@@ -572,6 +717,7 @@ def create_channel(body: ChannelCreate, request: Request, account: Account = Adm
         min_severity=body.min_severity,
         notify_on_incident=body.notify_on_incident,
         notify_on_approval=body.notify_on_approval,
+        notify_on_health=body.notify_on_health,
         config=public,
         secrets_enc=encrypt_dict(secrets),
     )
@@ -601,6 +747,8 @@ def update_channel(channel_id: int, body: ChannelUpdate, request: Request,
         channel.notify_on_incident = body.notify_on_incident
     if body.notify_on_approval is not None:
         channel.notify_on_approval = body.notify_on_approval
+    if body.notify_on_health is not None:
+        channel.notify_on_health = body.notify_on_health
     if body.credentials:
         public, secrets = channel_split_credentials(channel.kind, body.credentials)
         channel.config = {**channel.config, **public}
@@ -687,6 +835,9 @@ def _incident_brief(i: Incident) -> dict:
         "severity": i.severity, "status": i.status, "actor_username": i.actor_username,
         "target_asset": i.target_asset, "human_approval_required": i.human_approval_required,
         "confidence": i.confidence, "final_score": i.final_score,
+        "assigned_to": i.assigned_to, "acknowledged_at": i.acknowledged_at,
+        "acknowledged_by": i.acknowledged_by, "resolved_at": i.resolved_at,
+        "closed_reason": i.closed_reason,
         "created_at": i.created_at, "updated_at": i.updated_at,
     }
 
@@ -708,7 +859,8 @@ def _incident_full(i: Incident) -> dict:
 def _user_brief(u: User) -> dict:
     return {"id": u.id, "username": u.username, "display_name": u.display_name,
             "department": u.department, "title": u.title, "risk_score": u.risk_score,
-            "is_privileged": u.is_privileged, "is_blocked": u.is_blocked}
+            "is_privileged": u.is_privileged, "is_blocked": u.is_blocked,
+            "origin": u.origin}
 
 
 def _asset_brief(a: Asset) -> dict:
@@ -738,7 +890,8 @@ def _channel_brief(c: NotificationChannel) -> dict:
     return {
         "id": c.id, "kind": c.kind, "display_name": c.display_name, "enabled": c.enabled,
         "min_severity": c.min_severity, "notify_on_incident": c.notify_on_incident,
-        "notify_on_approval": c.notify_on_approval, "status": c.status,
+        "notify_on_approval": c.notify_on_approval, "notify_on_health": c.notify_on_health,
+        "status": c.status,
         "last_error": c.last_error, "last_sent": c.last_sent,
         "config": c.config, "secrets_set": set_secrets,
         "required_secrets": sorted(channel_secret_keys(c.kind)),

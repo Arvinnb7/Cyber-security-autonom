@@ -30,6 +30,28 @@ class AppState(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utcnow)
 
 
+class SystemHealth(SQLModel, table=True):
+    """Single-row self-monitoring state — the watchdog's memory.
+
+    A SOC that replaces human watchers must notice when it goes blind. The
+    scheduler heartbeats here every ingest cycle; the health job compares those
+    timestamps against the configured staleness window and alerts on a *state
+    change* (healthy -> degraded and back), so operators get one alert and one
+    recovery notice rather than a stream.
+    """
+
+    id: Optional[int] = Field(default=1, primary_key=True)
+    # Heartbeats written by the scheduler's ingest job.
+    last_cycle_at: Optional[datetime] = None      # last time a cycle ran at all
+    last_ingest_at: Optional[datetime] = None     # last time a cycle ingested >0 events
+    # Current evaluated state.
+    state: str = "unknown"                        # unknown | healthy | degraded
+    detail: str = ""                              # human-readable issue summary
+    issue_key: str = ""                           # stable key of the active issues (dedup)
+    last_alert_at: Optional[datetime] = None      # when we last alerted (cooldown)
+    updated_at: datetime = Field(default_factory=utcnow)
+
+
 class Organization(SQLModel, table=True):
     """A tenant. On-prem deploys use a single default org; SaaS adds more (Phase 5)."""
 
@@ -214,8 +236,29 @@ class Incident(SQLModel, table=True):
     evidence: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
 
     timeline: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
+
+    # --- Casework (who owns it, how fast we responded, was it real?) ---
+    # These turn the platform from "it detected something" into an auditable case
+    # record, and are the raw material for the MTTA/MTTR/false-positive metrics
+    # that prove how much analyst time the automation actually replaces.
+    assigned_to: Optional[str] = Field(default=None, index=True)   # account username
+    acknowledged_at: Optional[datetime] = None
+    acknowledged_by: Optional[str] = None
+    resolved_at: Optional[datetime] = None
+    closed_reason: str = ""            # true_positive | false_positive | benign
+
     created_at: datetime = Field(default_factory=utcnow, index=True)
     updated_at: datetime = Field(default_factory=utcnow)
+
+
+class IncidentNote(SQLModel, table=True):
+    """An analyst's note on an incident — the case's written record."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    incident_id: int = Field(foreign_key="incident.id", index=True)
+    author: str = Field(default="system", index=True)
+    body: str = ""
+    created_at: datetime = Field(default_factory=utcnow, index=True)
 
 
 class AuditAction(SQLModel, table=True):
@@ -264,6 +307,9 @@ class NotificationChannel(SQLModel, table=True):
     min_severity: str = "high"                        # low|medium|high|critical
     notify_on_incident: bool = True
     notify_on_approval: bool = True                   # escalate pending manager approvals
+    # Platform self-monitoring alerts (connector down, ingestion stopped). These
+    # deliberately IGNORE min_severity — a blind SOC is always critical.
+    notify_on_health: bool = True
     config: dict[str, Any] = Field(default_factory=dict, sa_column=Column(JSON))
     secrets_enc: str = ""                             # Fernet-encrypted JSON of secret fields
     status: str = "unknown"                           # unknown | connected | error
