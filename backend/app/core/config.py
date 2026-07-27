@@ -37,6 +37,13 @@ class Settings(BaseSettings):
     # A connection is "down" after this many consecutive poll failures.
     health_connector_failures: int = 3
 
+    # --- Database pooling (PostgreSQL only) ----------------------------------
+    # Keep (api_workers x (pool_size + max_overflow)) + worker under the server's
+    # max_connections. Defaults suit 4 API workers against a default Postgres.
+    db_pool_size: int = 5
+    db_max_overflow: int = 10
+    db_pool_recycle_seconds: int = 1800   # avoid stale connections behind proxies
+
     # --- Data mode -----------------------------------------------------------
     # "demo" => seed demo org + attack scenarios and run the simulators.
     # "live" => no demo data, no simulators; only real connectors feed the DB.

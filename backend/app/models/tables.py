@@ -48,6 +48,9 @@ class SystemHealth(SQLModel, table=True):
     state: str = "unknown"                        # unknown | healthy | degraded
     detail: str = ""                              # human-readable issue summary
     issue_key: str = ""                           # stable key of the active issues (dedup)
+    # Full issue payload, so the API can serve the watchdog's findings without
+    # re-running every check on each dashboard poll.
+    issues: list[dict[str, Any]] = Field(default_factory=list, sa_column=Column(JSON))
     last_alert_at: Optional[datetime] = None      # when we last alerted (cooldown)
     updated_at: datetime = Field(default_factory=utcnow)
 
@@ -163,6 +166,30 @@ class Asset(SQLModel, table=True):
     risk_score: float = 0.0
     origin: str = Field(default="demo", index=True)   # data mode this row belongs to
     created_at: datetime = Field(default_factory=utcnow)
+
+
+class UserBaselineState(SQLModel, table=True):
+    """Learned "normal" for one identity, kept as running counters.
+
+    Rebuilding every user's baseline from 30 days of raw events on every ingest
+    cycle does not scale (millions of rows, every 20 seconds), so the learned
+    state lives here instead: cheap to read, updated incrementally as events
+    arrive, and fully recomputed by a nightly job to correct the drift that
+    accumulates as old events age out of the window.
+
+    Counters — not sets — are stored so the "seen often enough to be normal"
+    thresholds behave exactly as they did when computed in memory.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    username: str = Field(index=True)
+    origin: str = Field(default="demo", index=True)   # data mode this row belongs to
+    login_count: int = 0
+    country_counts: dict[str, int] = Field(default_factory=dict, sa_column=Column(JSON))
+    hour_counts: dict[str, int] = Field(default_factory=dict, sa_column=Column(JSON))
+    known_devices: list[str] = Field(default_factory=list, sa_column=Column(JSON))
+    window_start: Optional[datetime] = None           # start of the learning window
+    updated_at: datetime = Field(default_factory=utcnow)
 
 
 class Event(SQLModel, table=True):

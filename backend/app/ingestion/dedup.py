@@ -39,3 +39,24 @@ def is_duplicate(session: Session, fingerprint: str) -> bool:
         select(Event.id).where(Event.fingerprint == fingerprint).limit(1)
     ).first()
     return existing is not None
+
+
+# Fingerprints per IN-clause; keeps the statement well within driver limits.
+_CHUNK = 500
+
+
+def existing_fingerprints(session: Session, fingerprints: list[str]) -> set[str]:
+    """Which of these fingerprints are already stored — in O(1) queries per chunk.
+
+    Checking one fingerprint at a time meant a round trip per event, so a single
+    polling cycle could issue thousands of queries. This collapses that to a
+    handful of ``IN`` lookups.
+    """
+    found: set[str] = set()
+    unique = list({f for f in fingerprints if f})
+    for i in range(0, len(unique), _CHUNK):
+        rows = session.exec(
+            select(Event.fingerprint).where(Event.fingerprint.in_(unique[i:i + _CHUNK]))
+        ).all()
+        found.update(r for r in rows if r)
+    return found

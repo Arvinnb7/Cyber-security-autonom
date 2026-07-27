@@ -95,11 +95,15 @@ def ready(session: Session = DB):
 
 
 @api_router.get("/system/health")
-def system_health(_: str = Auth, session: Session = DB) -> dict:
-    """Platform self-monitoring: is Sentinel actually watching right now?"""
+def system_health(fresh: bool = False, _: str = Auth, session: Session = DB) -> dict:
+    """Platform self-monitoring: is Sentinel actually watching right now?
+
+    Serves the watchdog's last computed state by default (cheap enough to poll);
+    ``?fresh=true`` re-runs every check on demand.
+    """
     from app.monitoring.health import health_snapshot
 
-    return health_snapshot(session)
+    return health_snapshot(session, fresh=fresh)
 
 
 @api_router.get("/connectors")
@@ -327,6 +331,7 @@ def update_incident_status(incident_id: int, body: StatusUpdate, request: Reques
     from app.scoring.engine import recompute_user_risk
 
     recompute_user_risk(session, incident.actor_username)
+    analytics.invalidate_sla_cache()   # the numbers just changed
     record_audit(session, account.username, "incident.status", target=str(incident_id),
                  detail={"status": body.status, "closed_reason": body.closed_reason or ""},
                  request=request)
@@ -347,6 +352,7 @@ def acknowledge_incident(incident_id: int, request: Request,
         session.add(incident)
         session.commit()
         session.refresh(incident)
+    analytics.invalidate_sla_cache()
     record_audit(session, account.username, "incident.acknowledge", target=str(incident_id),
                  request=request)
     return {"ok": True, "acknowledged_at": incident.acknowledged_at,

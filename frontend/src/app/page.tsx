@@ -17,24 +17,35 @@ export default function Dashboard() {
   const [health, setHealth] = useState<any>(null);
   const [sla, setSla] = useState<any>(null);
 
+  // Live threat state — the only thing that genuinely changes minute to minute.
   const load = useCallback(async () => {
-    const [overview, meta, sys, slaData] = await Promise.all([
-      api.overview(),
-      api.meta().catch(() => null),
+    const [overview, meta] = await Promise.all([api.overview(), api.meta().catch(() => null)]);
+    setData(overview);
+    if (meta) setAiOn(meta.ai_enabled);
+  }, []);
+
+  // Platform health and SLA move slowly and are far more expensive to compute,
+  // so they get their own much slower tick rather than riding the fast poll.
+  const loadSlow = useCallback(async () => {
+    const [sys, slaData] = await Promise.all([
       api.systemHealth().catch(() => null),
       api.slaMetrics().catch(() => null),
     ]);
-    setData(overview);
     setHealth(sys);
     setSla(slaData);
-    if (meta) setAiOn(meta.ai_enabled);
   }, []);
 
   useEffect(() => {
     load();
-    const t = setInterval(load, 5000); // live refresh
+    const t = setInterval(load, 10000); // live threat refresh
     return () => clearInterval(t);
   }, [load]);
+
+  useEffect(() => {
+    loadSlow();
+    const t = setInterval(loadSlow, 60000); // health + SLA
+    return () => clearInterval(t);
+  }, [loadSlow]);
 
   async function inject() {
     setBusy(true);

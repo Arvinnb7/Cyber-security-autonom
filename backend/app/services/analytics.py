@@ -5,6 +5,7 @@ datasets never bleed into each other when the user switches modes in-app.
 """
 from __future__ import annotations
 
+import time
 from datetime import timedelta
 
 from sqlmodel import Session, func, select
@@ -25,21 +26,26 @@ def _risk_band(score: float) -> str:
 
 
 def org_risk(session: Session) -> dict:
-    """Overall organization risk = blend of worst active incident and load (F9)."""
-    open_incidents = list(session.exec(
-        select(Incident).where(Incident.status.in_(["open", "investigating"]),
-                               Incident.origin == runtime.current_mode())
-    ))
-    if not open_incidents:
+    """Overall organization risk = blend of worst active incident and load (F9).
+
+    Aggregated in SQL — the dashboard polls this constantly, so it must not scale
+    with how many incidents are open.
+    """
+    top, count = session.exec(
+        select(func.max(Incident.final_score), func.count(Incident.id))
+        .where(Incident.status.in_(["open", "investigating"]),
+               Incident.origin == runtime.current_mode())
+    ).one()
+    count = count or 0
+    if not count:
         score = 0.0
     else:
-        top = max(i.final_score for i in open_incidents)
-        load = min(len(open_incidents) * 4, 30)
-        score = min(100.0, 0.8 * top + load)
+        load = min(count * 4, 30)
+        score = min(100.0, 0.8 * (top or 0.0) + load)
     return {
         "score": round(score, 1),
         "band": _risk_band(score),
-        "active_incidents": len(open_incidents),
+        "active_incidents": count,
     }
 
 
@@ -95,6 +101,17 @@ def detections_by_severity(session: Session) -> dict[str, int]:
     return counts
 
 
+# Short-lived in-process cache for the SLA figures. They are polled by every open
+# dashboard and embedded in reports, but they move slowly — a minute-old answer is
+# indistinguishable from a fresh one and costs nothing.
+_SLA_CACHE_TTL = 60.0
+_sla_cache: dict[tuple[str, int], tuple[float, dict]] = {}
+
+
+def invalidate_sla_cache() -> None:
+    _sla_cache.clear()
+
+
 def _minutes_between(start, end) -> float | None:
     if start is None or end is None:
         return None
@@ -114,45 +131,76 @@ def sla_metrics(session: Session, days: int = 30) -> dict:
     Anything Sentinel triaged and closed without a human ever acknowledging it
     counts as *autonomously handled* — that is the headcount argument, stated
     honestly rather than assumed.
+
+    Computed with SQL aggregates: this is polled by the dashboard and embedded in
+    reports, so it must not depend on how many incidents exist.
     """
+    mode = runtime.current_mode()
+    cached = _sla_cache.get((mode, days))
+    if cached and (time.monotonic() - cached[0]) < _SLA_CACHE_TTL:
+        return cached[1]
+
     cutoff = utcnow() - timedelta(days=days)
-    incidents = list(session.exec(
-        select(Incident).where(Incident.origin == runtime.current_mode(),
-                               Incident.created_at >= cutoff)
-    ))
-    total = len(incidents)
-    ack_times = [m for m in (_minutes_between(i.created_at, i.acknowledged_at) for i in incidents)
-                 if m is not None]
-    res_times = [m for m in (_minutes_between(i.created_at, i.resolved_at) for i in incidents)
-                 if m is not None]
-    closed = [i for i in incidents if i.status in ("resolved", "dismissed")]
-    with_reason = [i for i in closed if i.closed_reason]
-    false_positives = [i for i in with_reason if i.closed_reason == "false_positive"]
-    # Closed with no human acknowledgement = handled without analyst attention.
-    autonomous = [i for i in closed if i.acknowledged_at is None]
+    scope = (Incident.origin == mode, Incident.created_at >= cutoff)
+    closed_states = ["resolved", "dismissed"]
 
+    # Only the timestamps needed for the duration averages — computed in Python
+    # because SQLite and Postgres disagree on datetime arithmetic, but over a
+    # projection of two columns rather than whole ORM objects.
+    ack_rows = session.exec(
+        select(Incident.created_at, Incident.acknowledged_at)
+        .where(*scope, Incident.acknowledged_at.is_not(None))
+    ).all()
+    res_rows = session.exec(
+        select(Incident.created_at, Incident.resolved_at)
+        .where(*scope, Incident.resolved_at.is_not(None))
+    ).all()
+    ack_times = [m for m in (_minutes_between(a, b) for a, b in ack_rows) if m is not None]
+    res_times = [m for m in (_minutes_between(a, b) for a, b in res_rows) if m is not None]
+
+    total = session.exec(select(func.count(Incident.id)).where(*scope)).one()
+    closed = session.exec(
+        select(func.count(Incident.id)).where(*scope, Incident.status.in_(closed_states))
+    ).one()
+    autonomous = session.exec(
+        select(func.count(Incident.id)).where(*scope, Incident.status.in_(closed_states),
+                                              Incident.acknowledged_at.is_(None))
+    ).one()
+
+    # Closed cases carrying an analyst verdict, grouped per detection.
+    verdict_rows = session.exec(
+        select(Incident.det_id, Incident.closed_reason, func.count(Incident.id))
+        .where(*scope, Incident.status.in_(closed_states), Incident.closed_reason != "")
+        .group_by(Incident.det_id, Incident.closed_reason)
+    ).all()
     by_detection: dict[str, dict[str, int]] = {}
-    for i in with_reason:
-        row = by_detection.setdefault(i.det_id or "unknown", {"closed": 0, "false_positive": 0})
-        row["closed"] += 1
-        if i.closed_reason == "false_positive":
-            row["false_positive"] += 1
+    with_reason = 0
+    false_positives = 0
+    for det_id, reason, count in verdict_rows:
+        row = by_detection.setdefault(det_id or "unknown", {"closed": 0, "false_positive": 0})
+        row["closed"] += count
+        with_reason += count
+        if reason == "false_positive":
+            row["false_positive"] += count
+            false_positives += count
 
-    return {
+    result = {
         "window_days": days,
-        "incidents": total,
-        "closed": len(closed),
+        "incidents": total or 0,
+        "closed": closed or 0,
         "mtta_minutes": _avg(ack_times),
         "mttr_minutes": _avg(res_times),
         "acknowledged": len(ack_times),
-        "triaged_with_reason": len(with_reason),
-        "false_positives": len(false_positives),
-        "false_positive_rate": (round(100.0 * len(false_positives) / len(with_reason), 1)
+        "triaged_with_reason": with_reason,
+        "false_positives": false_positives,
+        "false_positive_rate": (round(100.0 * false_positives / with_reason, 1)
                                 if with_reason else None),
-        "autonomously_handled": len(autonomous),
-        "autonomous_pct": round(100.0 * len(autonomous) / len(closed), 1) if closed else None,
+        "autonomously_handled": autonomous or 0,
+        "autonomous_pct": round(100.0 * (autonomous or 0) / closed, 1) if closed else None,
         "by_detection": by_detection,
     }
+    _sla_cache[(mode, days)] = (time.monotonic(), result)
+    return result
 
 
 def stats_overview(session: Session) -> dict:

@@ -165,6 +165,32 @@ def test_health_snapshot_shape(session):
     assert snap["issues"] and "detail" in snap["issues"][0]
 
 
+def test_snapshot_never_claims_healthy_before_first_check(session):
+    """A never-evaluated watchdog must not report 'healthy' — it must go and look."""
+    _broken_connection(session)
+    assert get_state(session).state == "unknown"
+    snap = health_snapshot(session)             # default (cached) path
+    assert snap["state"] == "degraded"
+    assert snap["cached"] is False              # it evaluated rather than guessing
+
+
+def test_snapshot_serves_stored_verdict_once_evaluated(session, monkeypatch):
+    """After the watchdog has run, polling is cheap: it reuses the stored result
+    (with full issue detail) instead of re-running every check."""
+    fake = _FakeSender()
+    monkeypatch.setattr(notif_service, "build_sender", lambda ch: fake)
+    _broken_connection(session)
+    run_health_check(session)
+
+    snap = health_snapshot(session)
+    assert snap["cached"] is True
+    assert snap["state"] == "degraded"
+    assert snap["issues"][0]["title"] and snap["issues"][0]["detail"]
+
+    # ...and an explicit refresh still re-evaluates on demand.
+    assert health_snapshot(session, fresh=True)["cached"] is False
+
+
 # --- worldwide geo (previously silent for most of the planet) -------------
 
 def test_geo_covers_countries_outside_the_demo_set():

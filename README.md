@@ -211,6 +211,60 @@ response* loop autonomous for an M365/Azure estate. It does **not** cover
 malware/ransomware detection, which needs EDR telemetry (a later phase), and
 incident *ownership* still belongs to a human — the platform escalates to them.
 
+## Scale — measured, not claimed
+
+The number that decides whether an autonomous SOC keeps up is **how long one
+ingest+detect cycle takes versus the polling interval** (default 20s). If a cycle
+runs long, detection latency grows without bound. Run it yourself:
+
+```bash
+cd backend && python -m benchmarks.bench --users 5000 --days 30
+```
+
+Measured on a 4-vCPU Intel Xeon @ 2.10GHz / 15 GB RAM, Python 3.11, SQLite,
+5,000 users with 30 days (600k events) of history and 2,000 events per cycle:
+
+| Stage | Before | After |
+|---|---|---|
+| Behavioural baseline, per cycle | 28.33 s | **0.10 s** |
+| Ingest 2,000 events | 1.37 s / 4,009 queries | **0.49 s / 11 queries** |
+| Detection pass | 22.10 s | **0.32 s** |
+| **Full cycle (vs 20 s budget)** | **25.07 s — falls behind** | **0.99 s — keeps up** |
+| Queries per cycle | 3,526 | **15** |
+
+At double the target (10,000 users, 1.2M events of history, 5,000 events/cycle) a
+full cycle takes **2.48 s** — still ~8x inside the budget.
+
+What changed:
+- **Baselines are stored, not recomputed.** Learned behaviour lives in
+  `userbaselinestate` and is updated incrementally as events arrive; a nightly
+  job does the authoritative recompute (26 s at 5k users) so counters can't drift
+  as events age out of the window. A cycle reads one small row per user instead
+  of the entire 30-day history.
+- **Batched ingestion.** De-duplication and identity provisioning use chunked
+  `IN` lookups and multi-row writes, so cost tracks the number of batches rather
+  than the number of events.
+- **Activity-scoped detection.** The correlation window is read only for the
+  users and assets touched by the current cycle — cost follows what the
+  organization *did*, not how many people it employs.
+- **Composite indexes** matching the real access patterns, and **SQL aggregation**
+  for the dashboard/SLA figures instead of loading incidents into memory.
+
+`backend/tests/test_scale.py` pins these as invariants (bounded query counts,
+flat baseline cost as history grows, scoped and unscoped detection agreeing), so
+a future change that reintroduces a per-row query fails the build.
+
+### Operating at sustained volume
+- **Retention.** At ~1M events/day the 90-day default means ~90M rows. Lower
+  `SENTINEL_RETENTION_DAYS` or partition the `event` table monthly.
+- **Connection pool.** Keep
+  `api_workers x (SENTINEL_DB_POOL_SIZE + SENTINEL_DB_MAX_OVERFLOW)` plus the
+  worker container below PostgreSQL's `max_connections`. Defaults (5 + 10 across
+  4 workers = 60) fit a stock Postgres; raise `max_connections` before raising
+  these.
+- **One scheduler.** Only the worker container may run it
+  (`SENTINEL_RUN_SCHEDULER=true`); API workers must keep it off or cycles double up.
+
 ## Production deployment
 
 - **Database:** PostgreSQL in production (SQLite for dev). Schema is managed by

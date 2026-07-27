@@ -150,6 +150,11 @@ def issue_key(issues: list[HealthIssue]) -> str:
     return ",".join(sorted(i.key for i in issues))
 
 
+def _as_dict(issue: HealthIssue) -> dict:
+    return {"key": issue.key, "severity": issue.severity,
+            "title": issue.title, "detail": issue.detail}
+
+
 def run_health_check(session: Session) -> dict:
     """Evaluate health, persist the state, and alert on *transitions*.
 
@@ -186,21 +191,36 @@ def run_health_check(session: Session) -> dict:
     state.state = new_state
     state.issue_key = new_key
     state.detail = "; ".join(i.title for i in issues)
+    state.issues = [_as_dict(i) for i in issues]
     state.updated_at = now
     session.add(state)
     session.commit()
     return {"state": new_state, "issues": len(issues), "alerted": alerted}
 
 
-def health_snapshot(session: Session) -> dict:
-    """Current health for the API/dashboard (evaluated fresh, not cached)."""
-    issues = evaluate_health(session)
+def health_snapshot(session: Session, fresh: bool = False) -> dict:
+    """Current health for the API/dashboard.
+
+    By default this reports the state the watchdog job already computed (it runs
+    every few minutes), so a dashboard open on twenty desks doesn't re-run every
+    check on every poll. Pass ``fresh=True`` to force a live evaluation.
+    """
     state = get_state(session)
+    # Never claim "healthy" on the strength of a check that has not happened:
+    # before the watchdog's first run there is no stored verdict, so evaluate now.
+    if fresh or state.state == "unknown":
+        issues = evaluate_health(session)
+        payload = [_as_dict(i) for i in issues]
+        status = "degraded" if issues else "healthy"
+        fresh = True
+    else:
+        payload = list(state.issues or [])
+        status = state.state
     return {
-        "state": "degraded" if issues else "healthy",
-        "issues": [{"key": i.key, "severity": i.severity, "title": i.title, "detail": i.detail}
-                   for i in issues],
+        "state": status,
+        "issues": payload,
         "last_cycle_at": state.last_cycle_at,
         "last_ingest_at": state.last_ingest_at,
-        "checked_at": utcnow(),
+        "checked_at": state.updated_at if not fresh else utcnow(),
+        "cached": not fresh,
     }

@@ -9,6 +9,7 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import timedelta
 
+from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from app.core import runtime
@@ -23,13 +24,30 @@ from app.models.tables import Event, Signal
 WINDOW_MINUTES = 180
 
 
-def _recent_events(session: Session) -> list[Event]:
+def _recent_events(session: Session, active_users: set[str] | None = None,
+                   active_assets: set[str] | None = None) -> list[Event]:
+    """Events in the correlation window.
+
+    When the caller knows which subjects were touched this cycle, the window is
+    read only for them: detection then costs what the organization *did* in the
+    last cycle rather than what its entire population did in three hours. Passing
+    ``None`` scans everything (used by tests and manual runs).
+    """
     cutoff = utcnow() - timedelta(minutes=WINDOW_MINUTES)
-    return list(session.exec(
-        select(Event)
-        .where(Event.timestamp >= cutoff, Event.origin == runtime.current_mode())
-        .order_by(Event.timestamp)
-    ))
+    query = select(Event).where(Event.timestamp >= cutoff,
+                                Event.origin == runtime.current_mode())
+    if active_users is not None or active_assets is not None:
+        users = sorted(active_users or set())
+        assets = sorted(active_assets or set())
+        if not users and not assets:
+            return []
+        clauses = []
+        if users:
+            clauses.append(Event.actor_username.in_(users))
+        if assets:
+            clauses.append(Event.target_asset.in_(assets))
+        query = query.where(or_(*clauses) if len(clauses) > 1 else clauses[0])
+    return list(session.exec(query.order_by(Event.timestamp)))
 
 
 def _by_user(events: list[Event]) -> dict[str, list[Event]]:
@@ -428,9 +446,16 @@ def _signal_fingerprint(s: Signal) -> str:
     return f"{s.det_id}:{s.actor_username}:{s.target_asset}:{min(s.event_ids or [0])}"
 
 
-def run_detectors(session: Session) -> list[Signal]:
-    """Run all detectors over recent events, skipping already-known signals."""
-    events = _recent_events(session)
+def run_detectors(session: Session, active_users: set[str] | None = None,
+                  active_assets: set[str] | None = None) -> list[Signal]:
+    """Run all detectors over recent events, skipping already-known signals.
+
+    ``active_users``/``active_assets`` narrow the correlation window to subjects
+    touched by the current cycle; omit them to scan the whole window.
+    """
+    events = _recent_events(session, active_users, active_assets)
+    if not events:
+        return []
     baselines = Baselines(session, runtime.current_mode())
     candidates: list[Signal] = []
     for det in DETECTORS:

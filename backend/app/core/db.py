@@ -17,8 +17,21 @@ logger = logging.getLogger("sentinel.db")
 
 _is_sqlite = settings.database_url.startswith("sqlite")
 connect_args = {"check_same_thread": False} if _is_sqlite else {}
-engine = create_engine(settings.database_url, echo=False, pool_pre_ping=not _is_sqlite,
-                       connect_args=connect_args)
+
+# Connection pooling matters once several API workers serve concurrent analysts.
+# Budget: (api workers x (pool_size + max_overflow)) + worker container must stay
+# below the server's max_connections — see README.
+_pool_kwargs: dict = {}
+if not _is_sqlite:
+    _pool_kwargs = {
+        "pool_size": settings.db_pool_size,
+        "max_overflow": settings.db_max_overflow,
+        "pool_recycle": settings.db_pool_recycle_seconds,
+        "pool_pre_ping": True,
+    }
+
+engine = create_engine(settings.database_url, echo=False, connect_args=connect_args,
+                       **_pool_kwargs)
 
 
 def run_migrations() -> None:

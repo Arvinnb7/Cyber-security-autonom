@@ -15,6 +15,7 @@ from app.models.tables import (
     Signal,
     SystemHealth,
     User,
+    UserBaselineState,
     WeeklyReport,
 )
 
@@ -35,5 +36,6 @@ __all__ = [
     "Signal",
     "SystemHealth",
     "User",
+    "UserBaselineState",
     "WeeklyReport",
 ]

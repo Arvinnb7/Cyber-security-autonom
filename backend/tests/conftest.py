@@ -16,6 +16,17 @@ def _reset_runtime_mode():
     runtime._mode = None
 
 
+@pytest.fixture(autouse=True)
+def _clear_caches():
+    # In-process caches are module globals too — a value computed against one
+    # test's database must not be served to the next.
+    from app.services import analytics
+
+    analytics.invalidate_sla_cache()
+    yield
+    analytics.invalidate_sla_cache()
+
+
 @pytest.fixture
 def session():
     engine = create_engine(

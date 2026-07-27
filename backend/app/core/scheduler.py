@@ -61,6 +61,19 @@ def _health_job() -> None:
         logger.exception("health job failed")
 
 
+def _baseline_rebuild_job() -> None:
+    """Recompute behavioural baselines from raw history (corrects counter drift)."""
+    from app.core import runtime
+    from app.detection.baseline import rebuild_baselines
+
+    try:
+        with Session(engine) as session:
+            n = rebuild_baselines(session, runtime.current_mode())
+            logger.info("rebuilt baselines for %d user(s)", n)
+    except Exception:  # noqa: BLE001
+        logger.exception("baseline rebuild job failed")
+
+
 def _retention_job() -> None:
     """Purge raw events/signals past the retention window (incidents are kept)."""
     from datetime import timedelta
@@ -95,6 +108,7 @@ def start_scheduler() -> None:
                        max_instances=1, coalesce=True)
     _scheduler.add_job(_health_job, "interval", minutes=5, id="self_monitoring",
                        max_instances=1, coalesce=True)
+    _scheduler.add_job(_baseline_rebuild_job, "interval", days=1, id="baseline_rebuild")
     _scheduler.add_job(_retention_job, "interval", days=1, id="retention")
     _scheduler.start()
     logger.info("scheduler started (mode=%s, ingest every %ss, retention %sd)",
