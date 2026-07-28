@@ -5,12 +5,13 @@ datasets never bleed into each other when the user switches modes in-app.
 """
 from __future__ import annotations
 
-import time
 from datetime import timedelta
 
 from sqlmodel import Session, func, select
 
 from app.core import runtime
+from app.core.config import settings
+from app.core.limits import BoundedTTLCache
 from app.core.time import utcnow
 from app.models.tables import Asset, AuditAction, Event, Incident, User
 
@@ -104,8 +105,11 @@ def detections_by_severity(session: Session) -> dict[str, int]:
 # Short-lived in-process cache for the SLA figures. They are polled by every open
 # dashboard and embedded in reports, but they move slowly — a minute-old answer is
 # indistinguishable from a fresh one and costs nothing.
+#
+# Bounded on purpose: the cache key includes the caller-supplied window, so an
+# unbounded dict here would let `?days=1,2,3,…` grow memory without limit.
 _SLA_CACHE_TTL = 60.0
-_sla_cache: dict[tuple[str, int], tuple[float, dict]] = {}
+_sla_cache = BoundedTTLCache(maxsize=128, ttl_seconds=_SLA_CACHE_TTL)
 
 
 def invalidate_sla_cache() -> None:
@@ -136,9 +140,12 @@ def sla_metrics(session: Session, days: int = 30) -> dict:
     reports, so it must not depend on how many incidents exist.
     """
     mode = runtime.current_mode()
+    # Clamp defensively: this is also called from the report generator, and an
+    # absurd window would overflow the date arithmetic below.
+    days = max(1, min(int(days), settings.max_sla_window_days))
     cached = _sla_cache.get((mode, days))
-    if cached and (time.monotonic() - cached[0]) < _SLA_CACHE_TTL:
-        return cached[1]
+    if cached is not None:
+        return cached
 
     cutoff = utcnow() - timedelta(days=days)
     scope = (Incident.origin == mode, Incident.created_at >= cutoff)
@@ -199,7 +206,7 @@ def sla_metrics(session: Session, days: int = 30) -> dict:
         "autonomous_pct": round(100.0 * (autonomous or 0) / closed, 1) if closed else None,
         "by_detection": by_detection,
     }
-    _sla_cache[(mode, days)] = (time.monotonic(), result)
+    _sla_cache.set((mode, days), result)
     return result
 
 

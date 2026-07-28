@@ -18,13 +18,25 @@ def _reset_runtime_mode():
 
 @pytest.fixture(autouse=True)
 def _clear_caches():
-    # In-process caches are module globals too — a value computed against one
-    # test's database must not be served to the next.
+    # In-process caches and rate-limit counters are module globals too — state
+    # from one test must not be served to, or throttle, the next.
+    from app.api import routes
     from app.services import analytics
 
-    analytics.invalidate_sla_cache()
+    def reset():
+        analytics.invalidate_sla_cache()
+        routes._login_limiter.reset()
+        try:
+            from app import main
+
+            main._general_limiter.reset()
+            main._ai_limiter.reset()
+        except ImportError:  # pragma: no cover - main not imported in some runs
+            pass
+
+    reset()
     yield
-    analytics.invalidate_sla_cache()
+    reset()
 
 
 @pytest.fixture

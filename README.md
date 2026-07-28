@@ -254,6 +254,58 @@ What changed:
 flat baseline cost as history grows, scoped and unscoped detection agreeing), so
 a future change that reintroduces a per-row query fails the build.
 
+## Resilience under load — what happens when it's hammered
+
+Scaling throughput and surviving abuse are different problems. Every user-supplied
+bound is capped, every in-process structure has a ceiling, and every container
+restarts itself. Run it yourself against a live instance:
+
+```bash
+cd backend && python -m benchmarks.loadtest --url http://127.0.0.1:8000 --users 50 --seconds 30
+```
+
+Measured on the same 4-vCPU / 15 GB machine, **one** Uvicorn worker on SQLite —
+a deliberately pessimistic floor, since production runs four workers on PostgreSQL:
+
+| Check | Result |
+|---|---|
+| 50 concurrent users, 25 s | 1,881 requests, **all 200**, **zero 5xx** |
+| Latency p50 / p95 / p99 | 548 ms / 1,306 ms / 1,723 ms |
+| `?limit=999999999` (3 endpoints) | **422** — refused, not served |
+| `?days=999999999` | **422** — previously an unhandled `OverflowError` → 500 |
+| Oversized chat/note payload | **422** |
+| 300 logins with rotating usernames | throttled after 8 failures, **contained** |
+| 400 varied cache keys | **contained** |
+| Memory across 5,000 abusive requests | **122,824 kB → 122,828 kB** (flat) |
+| Server after all of the above | **healthy** |
+
+What was fixed:
+- **Bounded inputs.** Every `limit` and window is validated by FastAPI
+  (`ge`/`le`), so a hostile request is rejected before it can materialize a table
+  into memory. Chat questions, conversation history and notes are length-capped —
+  that payload is forwarded to Claude, so it is a cost vector as well as a memory one.
+- **Bounded memory.** `app/core/limits.py` provides an LRU+TTL cache and a
+  sliding-window limiter with a **capped key table**. The login throttle and the
+  SLA cache were both unbounded dictionaries keyed by attacker-controlled values;
+  they now evict instead of growing.
+- **Quotas.** A general per-client quota plus a much stricter tier for the
+  endpoints that call Claude. `/api/health` and `/api/ready` are exempt so an
+  orchestrator never kills a healthy container during a spike.
+- **Login throttling counts failures, not successes** — keyed by IP *and*
+  username, so rotating usernames from one source is still caught while a busy
+  office behind one NAT is never locked out by its own valid logins.
+- **Self-recovery.** All services declare `restart: unless-stopped` with memory
+  limits; Gunicorn recycles workers (`--max-requests` with jitter); the worker
+  container's healthcheck asserts the **scheduler heartbeat is fresh**, not merely
+  that the process exists.
+
+**Honest limits.** The rate limiter is in-process: with four API workers the
+effective quota is roughly four times the configured value, and it resets on
+deploy. It exists to stop the platform harming *itself* — a runaway client, a
+buggy script, an accidental loop. Real abuse or DDoS protection belongs at the
+edge (nginx, Cloudflare). The capacity figures above are a single-worker SQLite
+floor, not a tuned production ceiling.
+
 ### Operating at sustained volume
 - **Retention.** At ~1M events/day the 90-day default means ~90M rows. Lower
   `SENTINEL_RETENTION_DAYS` or partition the `event` table monthly.

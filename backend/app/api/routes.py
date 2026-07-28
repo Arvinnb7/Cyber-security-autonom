@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import time
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlmodel import Session, select
 
@@ -16,7 +16,9 @@ from app.core import runtime
 from app.core.audit import record_audit
 from app.core.auth import get_current_account, get_current_user, require_role
 from app.core.crypto import decrypt_dict, encrypt_dict
+from app.core.config import settings
 from app.core.db import get_session
+from app.core.limits import SlidingWindowLimiter
 from app.core.security import create_access_token, hash_password, verify_password
 from app.core.time import utcnow
 from app.models.schemas import (
@@ -142,26 +144,42 @@ def set_mode(body: ModeUpdate, request: Request, account: Account = AdminOnly, s
 
 # --- Auth -----------------------------------------------------------------
 
-# Very small in-memory login throttle: max attempts per username per window.
-_LOGIN_ATTEMPTS: dict[str, list[float]] = {}
+# Login throttle. Keyed by client IP *and* username so credential stuffing from a
+# single source is caught even when it rotates usernames, and bounded so that
+# rotation cannot itself exhaust memory.
 _LOGIN_MAX = 8
 _LOGIN_WINDOW = 300.0
+_login_limiter = SlidingWindowLimiter(limit=_LOGIN_MAX, window_seconds=_LOGIN_WINDOW,
+                                      max_keys=settings.rate_limit_max_keys)
 
 
-def _rate_limited(username: str) -> bool:
-    now = time.time()
-    hits = [t for t in _LOGIN_ATTEMPTS.get(username, []) if now - t < _LOGIN_WINDOW]
-    hits.append(now)
-    _LOGIN_ATTEMPTS[username] = hits
-    return len(hits) > _LOGIN_MAX
+def _client_ip(request: Request) -> str:
+    return request.client.host if request.client else "unknown"
+
+
+def _rate_limited(request: Request, username: str) -> bool:
+    """Is this caller currently locked out? Peeks — does not consume quota.
+
+    Only *failed* attempts count (see below), so a legitimately busy office behind
+    one NAT is never locked out by its own successful logins.
+    """
+    blocked_user, _ = _login_limiter.is_blocked(f"u:{username}")
+    blocked_ip, _ = _login_limiter.is_blocked(f"i:{_client_ip(request)}")
+    return blocked_user or blocked_ip
+
+
+def _record_login_failure(request: Request, username: str) -> None:
+    _login_limiter.record(f"u:{username}")
+    _login_limiter.record(f"i:{_client_ip(request)}")
 
 
 @api_router.post("/auth/login", response_model=Token)
 def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), session: Session = DB) -> Token:
-    if _rate_limited(form.username):
+    if _rate_limited(request, form.username):
         raise HTTPException(status_code=429, detail="Too many login attempts, try again later")
     account = session.exec(select(Account).where(Account.username == form.username)).first()
     if account is None or not account.is_active or not verify_password(form.password, account.hashed_password):
+        _record_login_failure(request, form.username)
         raise HTTPException(status_code=401, detail="Invalid credentials")
     account.last_login = utcnow()
     session.add(account)
@@ -248,7 +266,8 @@ def delete_account(account_id: int, request: Request, account: Account = AdminOn
 # --- Audit log (admin only) -----------------------------------------------
 
 @api_router.get("/audit")
-def list_audit(limit: int = 100, account: Account = AdminOnly, session: Session = DB) -> list[dict]:
+def list_audit(limit: int = Query(100, ge=1, le=settings.max_page_size),
+               account: Account = AdminOnly, session: Session = DB) -> list[dict]:
     rows = session.exec(select(AuditLog).order_by(AuditLog.created_at.desc()).limit(limit)).all()
     return [{"id": r.id, "actor": r.actor, "action": r.action, "target": r.target,
              "detail": r.detail, "ip": r.ip, "created_at": r.created_at} for r in rows]
@@ -272,7 +291,8 @@ def dashboard_overview(_: str = Auth, session: Session = DB) -> dict:
 # --- Incidents (F3/F4/F5/F6) ----------------------------------------------
 
 @api_router.get("/incidents")
-def list_incidents(status: str | None = None, limit: int = 50,
+def list_incidents(status: str | None = None,
+                   limit: int = Query(50, ge=1, le=settings.max_page_size),
                    _: str = Auth, session: Session = DB) -> list[dict]:
     items = analytics.top_incidents(session, limit=limit, status=status)
     return [_incident_brief(i) for i in items]
@@ -396,7 +416,8 @@ def add_incident_note(incident_id: int, body: NoteCreate, request: Request,
 
 
 @api_router.get("/metrics/sla")
-def sla_metrics(days: int = 30, _: str = Auth, session: Session = DB) -> dict:
+def sla_metrics(days: int = Query(30, ge=1, le=settings.max_sla_window_days),
+                _: str = Auth, session: Session = DB) -> dict:
     """Response-time and accuracy metrics — the ROI evidence for the business."""
     return analytics.sla_metrics(session, days=days)
 
@@ -797,7 +818,8 @@ def delete_channel(channel_id: int, request: Request, account: Account = AdminOn
 
 
 @api_router.get("/notifications")
-def list_notifications(limit: int = 50, _: Account = AnalystUp, session: Session = DB) -> list[dict]:
+def list_notifications(limit: int = Query(50, ge=1, le=settings.max_page_size),
+                       _: Account = AnalystUp, session: Session = DB) -> list[dict]:
     rows = session.exec(
         select(Notification)
         .where(Notification.origin == runtime.current_mode())

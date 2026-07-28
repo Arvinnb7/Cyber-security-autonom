@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class Token(BaseModel):
@@ -12,8 +12,11 @@ class Token(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    question: str
-    history: list[dict[str, Any]] | None = None
+    """Bounded: this payload is forwarded to Claude, so an unbounded question or
+    conversation history is both a memory and a cost amplification vector."""
+
+    question: str = Field(min_length=1, max_length=4000)
+    history: list[dict[str, Any]] | None = Field(default=None, max_length=20)
 
 
 class ChatResponse(BaseModel):
@@ -34,11 +37,11 @@ class StatusUpdate(BaseModel):
 
 
 class AssignRequest(BaseModel):
-    assignee: str | None = None  # account username; None/"" unassigns
+    assignee: str | None = Field(default=None, max_length=150)  # None/"" unassigns
 
 
 class NoteCreate(BaseModel):
-    body: str
+    body: str = Field(min_length=1, max_length=5000)
 
 
 class InjectRequest(BaseModel):

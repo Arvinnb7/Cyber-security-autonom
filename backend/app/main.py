@@ -12,6 +12,7 @@ from sqlmodel import Session
 from app.api import api_router
 from app.core.config import settings
 from app.core.db import engine, init_db
+from app.core.limits import SlidingWindowLimiter
 from app.core.logging import setup_logging
 from app.core.scheduler import shutdown_scheduler, start_scheduler
 
@@ -34,6 +35,12 @@ async def lifespan(app: FastAPI):
         if settings.is_production:
             raise RuntimeError(f"Refusing to start in production — {msg}. Set them via env.")
         logger.warning("SECURITY: %s (fine for dev, MUST be set in production).", msg)
+    # SQLite serializes writers and locks under concurrency — fine for dev, a
+    # latent outage under real analyst load.
+    if settings.is_production and settings.database_url.startswith("sqlite"):
+        logger.warning("SCALE: running production on SQLite. It single-writes and will "
+                       "lock under concurrent load — use PostgreSQL "
+                       "(SENTINEL_DATABASE_URL=postgresql+psycopg://...).")
     init_db()
     from app.core import runtime
     from app.simulation.seed import seed_all
@@ -60,6 +67,58 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+# --- Load protection ------------------------------------------------------
+# In-process quotas: enough to stop one client (or a buggy script) from taking
+# the platform down with itself. Real abuse/DDoS protection belongs at the edge —
+# with several API workers each holds its own counters, so the effective quota is
+# per worker. Documented in the README rather than silently assumed.
+_general_limiter = SlidingWindowLimiter(
+    limit=settings.rate_limit_per_minute, window_seconds=60.0,
+    max_keys=settings.rate_limit_max_keys)
+_ai_limiter = SlidingWindowLimiter(
+    limit=settings.rate_limit_ai_per_minute, window_seconds=60.0,
+    max_keys=settings.rate_limit_max_keys)
+
+# Endpoints that call out to Claude: slow and billable, so quota'd far harder.
+_AI_PATHS = ("/api/chat", "/api/reports/generate")
+# Liveness/readiness must never be throttled or the orchestrator will kill a
+# healthy container during a traffic spike.
+_EXEMPT_PATHS = ("/api/health", "/api/ready", "/metrics")
+
+
+def _client_key(request: Request) -> str:
+    client = request.client.host if request.client else "unknown"
+    # Prefer the authenticated caller when present so one noisy tenant behind a
+    # shared NAT doesn't throttle everyone else.
+    auth = request.headers.get("authorization", "")
+    return f"{client}|{auth[-24:]}" if auth else client
+
+
+@app.middleware("http")
+async def load_protection(request: Request, call_next):
+    from fastapi.responses import JSONResponse
+
+    path = request.url.path
+    if path.startswith("/api") and not path.startswith(_EXEMPT_PATHS):
+        # Reject oversized bodies before reading them into memory.
+        declared = request.headers.get("content-length")
+        if declared and declared.isdigit() and int(declared) > settings.max_request_bytes:
+            return JSONResponse(
+                status_code=413,
+                content={"detail": f"request body exceeds {settings.max_request_bytes} bytes"})
+
+        if settings.rate_limit_enabled:
+            limiter = _ai_limiter if path.startswith(_AI_PATHS) else _general_limiter
+            allowed, retry_after = limiter.check(_client_key(request))
+            if not allowed:
+                return JSONResponse(
+                    status_code=429,
+                    content={"detail": "Too many requests, slow down"},
+                    headers={"Retry-After": str(retry_after)})
+
+    return await call_next(request)
 
 
 @app.middleware("http")

@@ -21,5 +21,11 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
 
 # Production server: multiple Uvicorn workers behind Gunicorn. The scheduler is
 # disabled here (SENTINEL_RUN_SCHEDULER=false) and runs in a dedicated worker.
+#
+# --max-requests recycles each worker periodically so any slow leak (ours or a
+# dependency's) is reclaimed instead of accumulating for weeks; the jitter stops
+# all four workers restarting at the same moment. --graceful-timeout lets
+# in-flight requests finish before a worker is replaced.
 CMD ["gunicorn", "app.main:app", "-k", "uvicorn.workers.UvicornWorker", \
-     "--workers", "4", "--bind", "0.0.0.0:8000", "--timeout", "60"]
+     "--workers", "4", "--bind", "0.0.0.0:8000", "--timeout", "60", \
+     "--graceful-timeout", "30", "--max-requests", "2000", "--max-requests-jitter", "200"]

@@ -62,6 +62,19 @@ class Settings(BaseSettings):
     # value derived from jwt_secret if unset (with a warning) — set this in prod.
     encryption_key: str | None = None
 
+    # --- Load protection -----------------------------------------------------
+    # Every user-supplied bound needs a ceiling: without one, a single request can
+    # ask the server to materialize an entire table and take the worker with it.
+    max_page_size: int = 500              # hard cap on any `limit` parameter
+    max_sla_window_days: int = 365        # hard cap on analytics look-back
+    max_request_bytes: int = 1_000_000    # reject larger bodies with 413
+    # Per-client quotas (per API worker process — see README).
+    rate_limit_per_minute: int = 300      # general /api traffic
+    rate_limit_ai_per_minute: int = 20    # endpoints that call out to Claude
+    rate_limit_enabled: bool = True
+    # Ceiling on how many distinct clients/keys the in-process limiters track.
+    rate_limit_max_keys: int = 20_000
+
     # --- Transport / hardening ---
     # Comma-separated list of allowed browser origins for CORS.
     cors_origins: str = "http://localhost:3000"
