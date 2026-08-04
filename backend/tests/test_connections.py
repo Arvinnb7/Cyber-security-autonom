@@ -28,9 +28,7 @@ class _Resp:
         return self._payload
 
 
-def test_m365_signin_mapping(monkeypatch):
-    import app.connectors.real.microsoft365 as m
-
+def test_m365_signin_mapping(patch_graph_http):
     def fake_post(url, **kw):
         return _Resp(200, {"access_token": "tok"})
 
@@ -48,7 +46,7 @@ def test_m365_signin_mapping(monkeypatch):
             }]})
         return _Resp(200, {"value": []})  # directoryAudits
 
-    monkeypatch.setattr(m, "httpx", types.SimpleNamespace(post=fake_post, get=fake_get, HTTPError=Exception))
+    patch_graph_http(post=fake_post, get=fake_get)
 
     conn = Microsoft365Connector({"tenant_id": "t", "client_id": "c"}, {"client_secret": "s"})
     events = conn.fetch_events()
@@ -62,14 +60,11 @@ def test_m365_signin_mapping(monkeypatch):
     assert e.raw["new_device"] is True   # unmanaged device
 
 
-def test_m365_auth_failure_message(monkeypatch):
-    import app.connectors.real.microsoft365 as m
-
+def test_m365_auth_failure_message(patch_graph_http):
     def fake_post(url, **kw):
         return _Resp(401, text="invalid_client")
 
-    monkeypatch.setattr(m, "httpx", types.SimpleNamespace(post=fake_post, get=lambda *a, **k: _Resp(200),
-                                                          HTTPError=Exception))
+    patch_graph_http(post=fake_post, get=lambda *a, **k: _Resp(200))
     conn = Microsoft365Connector({"tenant_id": "t", "client_id": "c"}, {"client_secret": "bad"})
     ok, message = conn.test()
     assert ok is False

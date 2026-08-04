@@ -18,9 +18,7 @@ class _Resp:
         return {"access_token": "tok"}
 
 
-def test_m365_block_user_calls_graph_patch(monkeypatch):
-    import app.connectors.real.microsoft365 as m
-
+def test_m365_block_user_calls_graph_patch(patch_graph_http):
     calls = {}
 
     def fake_post(url, **kw):  # token endpoint
@@ -32,7 +30,7 @@ def test_m365_block_user_calls_graph_patch(monkeypatch):
         calls["json"] = kw.get("json")
         return _Resp(204)
 
-    monkeypatch.setattr(m, "httpx", types.SimpleNamespace(post=fake_post, request=fake_request, HTTPError=Exception))
+    patch_graph_http(post=fake_post, request=fake_request)
     conn = Microsoft365Connector({"tenant_id": "t", "client_id": "c"}, {"client_secret": "s"})
     result = conn.execute_action("block_user", "alice@corp.com")
     assert result.success

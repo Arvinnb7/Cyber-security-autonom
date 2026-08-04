@@ -195,6 +195,7 @@ const DICT: Record<string, { en: string; fa: string }> = {
   "action.reset_password": { en: "Reset Password", fa: "ریست رمز عبور" },
   "action.kill_session": { en: "Kill Session", fa: "بستن نشست" },
   "action.block_ip": { en: "Block IP", fa: "مسدودسازی IP" },
+  "action.isolate_host": { en: "Isolate Host", fa: "ایزوله‌کردن دستگاه" },
 
   // users page
   "users.subtitle": {

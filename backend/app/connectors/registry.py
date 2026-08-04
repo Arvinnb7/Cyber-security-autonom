@@ -47,9 +47,14 @@ PROVIDERS: dict[str, dict[str, Any]] = {
         ],
     },
     "microsoft_defender": {
-        "label": "Microsoft Defender",
-        "doc": "Azure AD app with SecurityEvents.Read.All (Graph Security API).",
-        "implemented": False,
+        "label": "Microsoft Defender XDR",
+        "doc": "Endpoint & email telemetry — the source for malware, ransomware, phishing "
+               "and lateral movement. Reuse the same Azure AD app registration as Microsoft "
+               "365 and add: SecurityAlert.Read.All (Defender verdicts) and "
+               "ThreatHunting.Read.All (Advanced Hunting). For host isolation also grant "
+               "Machine.Isolate.",
+        "implemented": True,
+        "actions": ["isolate_host"],
         "fields": [
             {"key": "tenant_id", "label": "Tenant ID", "secret": False},
             {"key": "client_id", "label": "Client ID", "secret": False},

@@ -1,3 +1,6 @@
+import importlib
+import types
+
 import pytest
 from sqlalchemy.pool import StaticPool
 from sqlmodel import Session, SQLModel, create_engine
@@ -49,3 +52,26 @@ def session():
     SQLModel.metadata.create_all(engine)
     with Session(engine) as s:
         yield s
+
+
+@pytest.fixture
+def patch_graph_http(monkeypatch):
+    """Patch Microsoft HTTP transport wherever a connector actually calls it.
+
+    Token acquisition and Graph reads live in the shared ``graph`` base while a
+    few vendor-specific calls (the Office 365 Management API) still use httpx
+    from their own module, so a fake must be installed in both places.
+    """
+    def _apply(**handlers):
+        fake = types.SimpleNamespace(HTTPError=Exception, **handlers)
+        for module in ("app.connectors.real.graph",
+                       "app.connectors.real.microsoft365",
+                       "app.connectors.real.defender"):
+            try:
+                mod = importlib.import_module(module)
+            except ImportError:
+                continue
+            monkeypatch.setattr(mod, "httpx", fake, raising=False)
+        return fake
+
+    return _apply

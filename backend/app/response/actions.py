@@ -21,6 +21,7 @@ AVAILABLE_ACTIONS = {
     "reset_password": {"label": "Reset Password", "connector": "azure"},
     "kill_session": {"label": "Kill Session", "connector": "microsoft_365"},
     "block_ip": {"label": "Block IP", "connector": "cloudflare"},
+    "isolate_host": {"label": "Isolate Host", "connector": "microsoft_defender"},
 }
 
 # Which live provider(s) can execute each action (Azure AD shares M365's connector).
@@ -29,6 +30,7 @@ _ACTION_PROVIDERS = {
     "reset_password": ["microsoft_365", "azure"],
     "kill_session": ["microsoft_365", "azure"],
     "block_ip": ["cloudflare"],
+    "isolate_host": ["microsoft_defender"],
 }
 
 

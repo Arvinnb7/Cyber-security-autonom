@@ -6,6 +6,7 @@ import logging
 from sqlmodel import Session, select
 
 from app.connectors.real.base import ConnectorError, RealConnector
+from app.connectors.real.defender import MicrosoftDefenderConnector
 from app.connectors.real.microsoft365 import Microsoft365Connector
 from app.core.crypto import decrypt_dict
 from app.core.time import utcnow
@@ -17,6 +18,7 @@ logger = logging.getLogger("sentinel.connectors")
 _REGISTRY: dict[str, type[RealConnector]] = {
     "microsoft_365": Microsoft365Connector,
     "azure": Microsoft365Connector,
+    "microsoft_defender": MicrosoftDefenderConnector,
 }
 
 

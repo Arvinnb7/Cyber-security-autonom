@@ -17,7 +17,7 @@ to **replace tier‑1/2 monitoring headcount**, not just assist it.
 
 | # | Capability | Where it lives |
 |---|------------|----------------|
-| 1 | **Connect to security sources** — M365, Google Workspace, Defender, CrowdStrike, SentinelOne, Cloudflare, AWS, Azure | `backend/app/connectors/` |
+| 1 | **Connect to security sources** — live today: Microsoft 365 / Entra ID and Defender XDR; configurable (connector pending): Google Workspace, CrowdStrike, SentinelOne, Cloudflare, AWS | `backend/app/connectors/` |
 | 2 | **Collect & unify events** — log ingestion, normalization, de-duplication | `backend/app/ingestion/` |
 | 3 | **Threat detection** — suspicious login, account takeover, anomalous activity, ransomware, data exfiltration | `backend/app/detection/` |
 | 4 | **Threat scoring** *(the core)* — threat, user, asset, business-impact and final score | `backend/app/scoring/` |
@@ -123,18 +123,39 @@ provides:
 
 | Detection | Works on real data today | Source needed |
 |-----------|--------------------------|---------------|
-| DET-001 Suspicious Login | ✅ (M365 sign-ins + baseline, worldwide impossible-travel, real admin privilege) | Microsoft 365 |
-| DET-002 Account Compromise | ✅ (sign-ins + MFA/password audit + file activity) | Microsoft 365 |
-| DET-007 Privilege Abuse | ⚠️ partial (directory audit) | Microsoft 365 |
-| DET-003 Phishing | ⚠️ needs mail-security signal | Defender for O365 (Phase 4) |
-| DET-006 Data Exfiltration | ⚠️ partial (file download; upload signal missing) | + network/DLP (Phase 4) |
-| DET-004 Malware / DET-005 Ransomware | ❌ needs EDR telemetry | CrowdStrike/SentinelOne (Phase 4) |
-| DET-008/009/010 | ⚠️ partial / source-dependent | varies |
+| DET-001 Suspicious Login | ✅ sign-ins + learned baseline, worldwide impossible-travel, real admin privilege | Microsoft 365 |
+| DET-002 Account Compromise | ✅ sign-ins + MFA/password audit + file activity | Microsoft 365 |
+| DET-003 Phishing | ✅ `EmailEvents` — spoofed sender, malicious URL, attachment, auth failure, campaign size | Defender XDR |
+| DET-004 Malware Execution | ✅ Defender verdicts + `DeviceProcessEvents` (obfuscated PowerShell, elevated, unknown hash) | Defender XDR |
+| DET-005 Ransomware | ✅ rename bursts + shadow-copy deletion + ransomware verdict | Defender XDR |
+| DET-006 Data Exfiltration | ✅ bulk download + bulk/external upload | Microsoft 365 |
+| DET-007 Privilege Abuse | ✅ directory audit + security-control tampering | M365 + Defender |
+| DET-008 Security Config Change | ⚠️ partial — covers MFA/logging policy changes; firewall & cloud exposure need network/cloud sources | Microsoft 365 |
+| DET-009 Lateral Movement | ✅ remote logons + remote-execution tooling | Defender XDR |
+| DET-010 Privilege Escalation | ✅ role additions / role changes | Microsoft 365 |
+
+**9 of 10 fire on real telemetry**; DET-008 is partial because firewall and cloud
+exposure changes come from sources not yet connected (AWS/Cloudflare).
 
 Live-mode ingestion auto-provisions users & assets from real events so risk
-scoring has real subjects. **Note:** the Office 365 file/email activity feed
-(Management Activity API) is implemented but must be validated against a real
-tenant during a pilot; EDR-driven detections require the Phase-4 connectors.
+scoring has real subjects.
+
+> **Validation status — read this before quoting the table.** Every mapping is
+> unit-tested against recorded payload shapes, and the detections above are
+> proven end-to-end in `backend/tests/test_defender.py` (Defender-shaped events
+> in → DET-003/004/005/009 out, with no simulator flags anywhere). What that does
+> **not** prove is that a given tenant's real payloads match those shapes: the
+> Office 365 Management Activity feed and the Defender Advanced Hunting queries
+> both need confirming against a live tenant during a pilot. Treat this as
+> "implemented and tested", not "certified in production".
+
+### Connecting Defender
+Reuse the **same Azure AD app registration** as Microsoft 365 and add the
+application permissions `SecurityAlert.Read.All` and `ThreatHunting.Read.All`
+(plus `Machine.Isolate` if you want host isolation), then add a *Microsoft
+Defender XDR* connection on the Integrations page. Each source degrades
+independently — a tenant licensed for Defender for Endpoint but not for Office
+365 still gets endpoint detections.
 
 ## Real response actions (not a demo)
 
@@ -145,6 +166,9 @@ the connected source — not a simulated one:
   (`accountEnabled=false`), `Kill session` (revoke sign-in sessions), `Reset
   password` (force change). They require the app registration to also have
   `User.ReadWrite.All`.
+- **Microsoft Defender** adds `Isolate host` — cutting a compromised machine off
+  the network, which is the containment step that actually stops ransomware
+  spreading. Requires `Machine.Isolate`.
 - **Safety guardrail:** real execution only happens when you turn on **Automated
   response** for that integration (Integrations page). Otherwise the action is
   recorded as `blocked by policy`. Manager approval + full audit still apply.

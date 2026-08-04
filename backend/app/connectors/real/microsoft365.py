@@ -9,19 +9,25 @@ from __future__ import annotations
 
 import logging
 import secrets as _secrets
-from datetime import datetime, timezone
 
 import httpx
 
 from app.connectors.base import ActionResult, RawEvent
-from app.connectors.real.base import ConnectorError, RealConnector
+from app.connectors.real.base import ConnectorError
+from app.connectors.real.graph import (
+    TIMEOUT,
+    AzureGraphConnector,
+    graph_time as _graph_time,
+    parse_ts as _parse_ts,
+)
 
 logger = logging.getLogger("sentinel.connectors.m365")
 
-GRAPH = "https://graph.microsoft.com/v1.0"
 MANAGE = "https://manage.office.com/api/v1.0"
-LOGIN = "https://login.microsoftonline.com"
-TIMEOUT = 20.0
+
+# An upload at or above this size counts as a bulk transfer (DET-006). Tuned
+# conservatively: most day-to-day document saves fall well under it.
+LARGE_UPLOAD_BYTES = 20 * 1024 * 1024
 
 # Office 365 audit "Operation" -> canonical action the detectors understand.
 _SP_OPS = {
@@ -40,70 +46,13 @@ _EXO_OPS = {
 }
 
 
-def _graph_time(cursor: str | None) -> str | None:
-    """Format an ISO cursor for a Graph $filter (must end with Z)."""
-    if not cursor:
-        return None
-    return cursor if cursor.endswith("Z") else cursor.split("+")[0] + "Z"
-
-
-def _parse_ts(value: str | None) -> datetime:
-    if not value:
-        return datetime.now(timezone.utc).replace(tzinfo=None)
-    try:
-        return datetime.fromisoformat(value.replace("Z", "+00:00")).astimezone(timezone.utc).replace(tzinfo=None)
-    except ValueError:
-        return datetime.now(timezone.utc).replace(tzinfo=None)
-
-
-class Microsoft365Connector(RealConnector):
+class Microsoft365Connector(AzureGraphConnector):
     provider = "microsoft_365"
+    required_permission = "AuditLog.Read.All"
     supported_actions = ("block_user", "kill_session", "reset_password")
 
-    def _token(self, scope: str = "https://graph.microsoft.com/.default") -> str:
-        tenant = self.config.get("tenant_id")
-        client_id = self.config.get("client_id")
-        secret = self.secrets.get("client_secret")
-        if not (tenant and client_id and secret):
-            raise ConnectorError("Missing tenant_id, client_id or client_secret")
-        try:
-            resp = httpx.post(
-                f"{LOGIN}/{tenant}/oauth2/v2.0/token",
-                data={
-                    "client_id": client_id,
-                    "client_secret": secret,
-                    "scope": scope,
-                    "grant_type": "client_credentials",
-                },
-                timeout=TIMEOUT,
-            )
-        except httpx.HTTPError as exc:
-            raise ConnectorError(f"Cannot reach Microsoft login endpoint: {exc}") from exc
-        if resp.status_code != 200:
-            raise ConnectorError(f"Auth failed ({resp.status_code}): {resp.text[:200]}")
-        token = resp.json().get("access_token")
-        if not token:
-            raise ConnectorError("No access_token in Microsoft response")
-        return token
 
-    def _get(self, token: str, path: str) -> list[dict]:
-        try:
-            resp = httpx.get(f"{GRAPH}/{path}", headers={"Authorization": f"Bearer {token}"}, timeout=TIMEOUT)
-        except httpx.HTTPError as exc:
-            raise ConnectorError(f"Graph request failed: {exc}") from exc
-        if resp.status_code == 403:
-            raise ConnectorError("Access denied — grant AuditLog.Read.All (application) and admin-consent it.")
-        if resp.status_code != 200:
-            raise ConnectorError(f"Graph error ({resp.status_code}): {resp.text[:200]}")
-        return resp.json().get("value", [])
 
-    def _write(self, token: str, method: str, path: str, json: dict | None = None) -> tuple[int, str]:
-        try:
-            resp = httpx.request(method, f"{GRAPH}/{path}",
-                                 headers={"Authorization": f"Bearer {token}"}, json=json, timeout=TIMEOUT)
-        except httpx.HTTPError as exc:
-            raise ConnectorError(f"Graph request failed: {exc}") from exc
-        return resp.status_code, resp.text
 
     def fetch_events(self, cursor: str | None = None) -> list[RawEvent]:
         token = self._token()
@@ -198,14 +147,23 @@ class Microsoft365Connector(RealConnector):
             activity = (a.get("activityDisplayName") or "").lower()
             action = "config_change"
             raw_extra: dict = {"activity": a.get("activityDisplayName"), "category": a.get("category")}
-            if "add member to role" in activity or "add user" in activity:
-                action = "admin_create_user"
+            # These action names are a contract with app/detection/detectors.py:
+            # a nearly-right name means the detection silently never fires.
+            if "add member to role" in activity or "add eligible member" in activity:
+                action = "group_add_admin"          # DET-010 added_to_admin_group
+            elif "update role" in activity or "role assignment" in activity:
+                action = "role_change_admin"        # DET-010 role_changed_to_admin
+            elif "add user" in activity:
+                action = "admin_create_user"        # DET-007 new_admin_user_created
             elif "update" in activity and "policy" in activity:
-                action = "config_change"
-                raw_extra["change"] = "mfa_disabled" if "authentication" in activity else "logging_disabled"
+                is_mfa = "authentication" in activity or "mfa" in activity
+                raw_extra["change"] = "mfa_disabled" if is_mfa else "logging_disabled"
+                # DET-002 tests for the *action*, DET-008 for the raw change key —
+                # emit the dedicated action so both can fire.
+                action = "mfa_disabled" if is_mfa else "config_change"
             elif "reset" in activity and "password" in activity:
                 action = "password_changed"
-            out.append(RawEvent(
+            events = [RawEvent(
                 source=self.provider,
                 timestamp=_parse_ts(a.get("activityDateTime")),
                 category="process",
@@ -214,7 +172,21 @@ class Microsoft365Connector(RealConnector):
                 target_asset="azure-ad",
                 severity=3,
                 raw=raw_extra,
-            ))
+            )]
+            # A weakened MFA policy is both an account-compromise signal and a
+            # security-posture change, so DET-008 gets its config_change too.
+            if action == "mfa_disabled":
+                events.append(RawEvent(
+                    source=self.provider,
+                    timestamp=_parse_ts(a.get("activityDateTime")),
+                    category="process",
+                    action="config_change",
+                    actor_username=initiated.get("userPrincipalName"),
+                    target_asset="azure-ad",
+                    severity=3,
+                    raw=dict(raw_extra),
+                ))
+            out.extend(events)
         return out
 
     # --- file/email activity (Office 365 Management Activity API) ----------
@@ -258,11 +230,23 @@ class Microsoft365Connector(RealConnector):
         action = _SP_OPS.get(r.get("Operation"))
         if not action:
             return None
+        raw = {"file": r.get("SourceFileName"), "object": r.get("ObjectId"),
+               "op": r.get("Operation"), "bytes": r.get("SourceFileSize")}
+        if action == "file_upload":
+            # DET-006 looks for `large_upload`, not `file_upload`: an upload only
+            # signals exfiltration when it is bulky or leaves the tenant, so the
+            # distinction is real rather than cosmetic.
+            size = int(r.get("SourceFileSize") or 0)
+            # Guest/anonymous recipients mean the data left the organization.
+            external = str(r.get("TargetUserOrGroupType") or "").lower() in ("guest", "anonymous")
+            if size >= LARGE_UPLOAD_BYTES or external:
+                action = "large_upload"
+                raw["external"] = external
         return RawEvent(
             source=self.provider, timestamp=_parse_ts(r.get("CreationTime")), category="file",
             action=action, actor_username=r.get("UserId"), src_ip=r.get("ClientIP"),
             target_asset=r.get("Workload") or "sharepoint", severity=2,
-            raw={"file": r.get("SourceFileName"), "object": r.get("ObjectId"), "op": r.get("Operation")},
+            raw=raw,
         )
 
     def _map_exchange(self, r: dict) -> RawEvent | None:
